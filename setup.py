@@ -35,7 +35,7 @@ setup(
         'eulxml',
         'rdflib>=3.0',
         'python-dateutil',
-	'poster',
+        'requests',
         'pycrypto',
         'soaplib==0.8.1',
     ],

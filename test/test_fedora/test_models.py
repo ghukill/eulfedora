@@ -70,18 +70,13 @@ class SimpleDigitalObject(models.DigitalObject):
 TEXT_CONTENT = "Here is some text content for a non-xml datastream."
 def _add_text_datastream(obj):    
     # add a text datastream to the current test object
-    FILE = tempfile.NamedTemporaryFile(mode="w", suffix=".txt")
-    FILE.write(TEXT_CONTENT)
-    FILE.flush()
     # info for calling addDatastream, and return
     ds = {  'id' : 'TEXT', 'label' : 'text datastream', 'mimeType' : 'text/plain',
         'controlGroup' : 'M', 'logMessage' : "creating new datastream", 'versionable': False,
         'checksumType' : 'MD5'}
     obj.api.addDatastream(obj.pid, ds['id'], ds['label'],
-        ds['mimeType'], ds['logMessage'], ds['controlGroup'], filename=FILE.name,
+        ds['mimeType'], ds['logMessage'], ds['controlGroup'], content=TEXT_CONTENT,
         checksumType=ds['checksumType'], versionable=ds['versionable'])
-    FILE.close()
-    
 
 
 class TestDatastreams(FedoraTestCase):

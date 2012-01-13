@@ -17,8 +17,8 @@
 import csv
 import logging
 from os import path
-from urllib import urlencode
-from urlparse import urlsplit
+import urllib
+from urlparse import urljoin, urlsplit
 import time
 import warnings
 
@@ -29,9 +29,11 @@ from soaplib.client import ServiceClient, SimpleSoapClient
 from soaplib.wsgi_soap import SimpleWSGISoapApp
 
 from poster.encode import multipart_encode, MultipartParam
+import requests
+from StringIO import StringIO
 
 from eulfedora.util import auth_headers, datetime_to_fedoratime, \
-     RequestFailed, parse_rdf
+     RequestFailed, parse_rdf, PermissionDenied, ChecksumMismatch, RequestFailed
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,7 @@ def _safe_urlencode(query, doseq=0):
     # before passing them to urlencode
     wrapped = [(_safe_str(k), _safe_str(v))
                for k, v in _get_items(query, doseq)]
-    return urlencode(wrapped, doseq)
+    return urllib.urlencode(wrapped, doseq)
 
 def _safe_str(s):
     # helper for _safe_urlencode: utf-8 encode unicode strings, convert
@@ -70,15 +72,76 @@ def _get_items(query, doseq):
 
 
 class HTTP_API_Base(object):
-    def __init__(self, opener):
-        self.opener = opener
+    def __init__(self, base_url, username=None, password=None):
+        self.base_url = base_url
+        self.username = username
+        self.password = password
+        self.extra_request_args = {
+            'verify': True  # verify SSL certs by default
+            # TODO: custom user agent to identify eulfedora/version ? 
+        }
+        if self.username is not None:
+            # store basic auth option to pass when making requests
+            self.extra_request_args['auth'] = (self.username, self.password)
 
-    def open(self, method, rel_url, body=None, headers={}, throw_errors=True):
-        return self.opener.open(method, rel_url, body, headers, throw_errors)
+    def absurl(self, rel_url):
+        return urljoin(self.base_url, rel_url)
 
-    def read(self, rel_url, data=None, **kwargs):
-        return self.opener.read(rel_url, data, **kwargs)
+    def _sanitize_url(self, url):
+        # a unicode url will surprisingly make httplib.Connection raise an
+        # exception later if it tries to send a body that includes non-ascii
+        # characters. coerce the url into ascii so that doesn't happen
+        if isinstance(url, unicode):
+            url = url.encode('utf-8')
+        if not isinstance(url, basestring):
+            url = str(url)
+        # list derived from rfc 3987 "reserved" ebnf, plus "%" because we
+        # fail without that.
+        return urllib.quote(url, safe=":/?[]@!$&'()*+,;=%")
 
+    def prep_url(self, url):
+        return self._sanitize_url(self.absurl(url))
+
+    # thinnest possible wrappers around requests calls
+    # - add auth, make urls absolute
+
+    def _make_request(self, reqmeth, url, *args, **kwargs):
+        kwargs.update(self.extra_request_args)
+        response = reqmeth(self.prep_url(url), *args, **kwargs)
+
+        # FIXME: handle 3xx (?) [possibly handled for us by requests]
+        if response.status_code >= requests.codes.bad:  # 400 or worse
+            # separate out 401 and 403 (permission errors) to enable
+            # special handling in client code.
+            if response.status_code in (requests.codes.unauthorized,
+                                        requests.codes.forbidden):
+                raise PermissionDenied(response)
+            elif response.status_code == requests.codes.server_error:
+                # check response content to determine if this is a
+                # ChecksumMismatch or a more generic error
+                if 'ValidationException: Checksum Mismatch' in response.content:
+                    raise ChecksumMismatch(response)
+                else:
+                    raise RequestFailed(response)
+            else:
+                raise RequestFailed(response)
+
+        return response
+
+    def get(self, *args, **kwargs):
+        return self._make_request(requests.get, *args, **kwargs)
+    
+    def put(self, *args, **kwargs):
+    	return self._make_request(requests.put, *args, **kwargs)
+        
+    def post(self, *args, **kwargs):
+        return self._make_request(requests.post, *args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        return self._make_request(requests.delete, *args, **kwargs)
+
+    # also available: head, patch
+    
 
 class REST_API(HTTP_API_Base):
     """
@@ -122,7 +185,9 @@ class REST_API(HTTP_API_Base):
             http_args['sessionToken'] = session_token
         if chunksize:
             http_args['maxResults'] = chunksize
-        return self.read('objects?' + _safe_urlencode(http_args))
+
+        r = self.get('objects?', params=http_args)
+        return r.content, r.url
 
     def getDatastreamDissemination(self, pid, dsID, asOfDateTime=None, return_http_response=False):
         """Get a single datastream on a Fedora object; optionally, get the version
@@ -149,20 +214,30 @@ class REST_API(HTTP_API_Base):
         http_args = {}
         if asOfDateTime:
             http_args['asOfDateTime'] = datetime_to_fedoratime(asOfDateTime)
-        url = 'objects/%s/datastreams/%s/content?%s' % (pid, dsID, _safe_urlencode(http_args))
-        return self.read(url, return_http_response=return_http_response)
+        #url = 'objects/%s/datastreams/%s/content?%s' % (pid, dsID, _safe_urlencode(http_args))
+        url = 'objects/%s/datastreams/%s/content' % (pid, dsID)
+        r = self.get(url, params=http_args)
+        if return_http_response:
+            return r
+        return r.content, r.url
 
     # NOTE: getDissemination was not available in REST API until Fedora 3.3
     def getDissemination(self, pid, sdefPid, method, method_params={}, return_http_response=False):        
         # /objects/{pid}/methods/{sdefPid}/{method} ? [method parameters]        
         uri = 'objects/%s/methods/%s/%s' % (pid, sdefPid, method)
-        if method_params:
-            uri += '?' + _safe_urlencode(method_params)
-        return self.read(uri, return_http_response=return_http_response)
+        # if method_params:
+        #     uri += '?' + _safe_urlencode(method_params)
+        r = self.get(uri, params=method_params)
+        if return_http_response:
+            return r
+        else:
+            return r.content, r.url
 
     def getObjectHistory(self, pid):
         # /objects/{pid}/versions ? [format]
-        return self.read('objects/%s/versions?%s' % (pid, _safe_urlencode(self.format_xml)))
+        url = 'objects/%s/versions' % (pid, )
+        r = self.get(url, params=self.format_xml)
+        return r.content, r.url
 
     def getObjectProfile(self, pid, asOfDateTime=None):
         """Get top-level information aboug a single Fedora object; optionally,
@@ -177,8 +252,9 @@ class REST_API(HTTP_API_Base):
         if asOfDateTime:
             http_args['asOfDateTime'] = datetime_to_fedoratime(asOfDateTime)
         http_args.update(self.format_xml)
-        url = 'objects/%s?%s' % (pid, _safe_urlencode(http_args))
-        return self.read(url)
+        url = 'objects/%s' % (pid, )
+        r = self.get(url, params=http_args)
+        return r.content, r.url
 
     def listDatastreams(self, pid):
         """
@@ -187,32 +263,32 @@ class REST_API(HTTP_API_Base):
         Wrapper function for `Fedora REST API listDatastreams <http://fedora-commons.org/confluence/display/FCR30/REST+API#RESTAPI-listDatastreams>`_
 
         :param pid: string object pid
-        :param parse: optional data parser function; defaults to returning
-                      raw string data
         :rtype: string xml data
         """
-        # /objects/{pid}/datastreams ? [format, datetime]        
-        return self.read('objects/%s/datastreams?%s' % (pid, _safe_urlencode(self.format_xml)))
+        # /objects/{pid}/datastreams ? [format, datetime]
+        url = 'objects/%s/datastreams' % (pid, )
+        r = self.get(url, params=self.format_xml)
+        return r.content, r.url
 
     def listMethods(self, pid, sdefpid=None):
         # /objects/{pid}/methods ? [format, datetime]
         # /objects/{pid}/methods/{sdefpid} ? [format, datetime]
         
         ## NOTE: getting an error when sdefpid is specified; fedora issue?
-        
         uri = 'objects/%s/methods' % pid
         if sdefpid:
             uri += '/' + sdefpid
-        return self.read(uri + '?' + _safe_urlencode(self.format_xml))
+    	r = self.get(uri, params=self.format_xml)
+        return r.content, r.url
 
     ### API-M methods (management) ####
 
     def addDatastream(self, pid, dsID, dsLabel=None,  mimeType=None, logMessage=None,
         controlGroup=None, dsLocation=None, altIDs=None, versionable=None,
-        dsState=None, formatURI=None, checksumType=None, checksum=None, filename=None, content=None):
+        dsState=None, formatURI=None, checksumType=None, checksum=None, content=None):
         # objects/{pid}/datastreams/NEWDS? [opts]
         # content via multipart file in request content, or dsLocation=URI
-        # one of dsLocation or filename must be specified
+        # one of dsLocation or content must be specified
 
         # if checksum is sent without checksum type, Fedora seems to
         # ignore it (does not error on invalid checksum with no checksum type)
@@ -240,43 +316,27 @@ class REST_API(HTTP_API_Base):
         if checksum:
             http_args['checksum'] = checksum
 
-        #Legacy code for files.
-        fp = None
-        if filename:
-            fp = open(filename, 'rb')
-            body = fp
-            headers = {'Content-Type': mimeType}
-            # because file-like objects are posted in chunks, this file object has to stay open until the post
-            # completes - close it after we get a response
-
-        #Added code to match how content is now handled, see modifyDatastream.
-        elif content:
+        # Added code to match how content is now handled, see modifyDatastream.
+        content_args = {}
+         # could be a string or a file-like object
+        if content:
             if hasattr(content, 'read'):    # if content is a file-like object, warn if no checksum
                 if not checksum:
                     logging.warning("File was ingested into fedora without a passed checksum for validation, pid was: %s and dsID was: %s." % (pid, dsID))
 
-            body = content  # could be a string or a file-like object
-            headers = { 'Content-Type' : mimeType,
-                        # - don't attempt to calculate length here (will fail on files)
-                        # the http connection class will calculate & set content-length for us
-                        #'Content-Length' : str(len(body))
-            }
-        else:
-            headers = {}
-            body = None
+                content_args['files'] = {'file': content}
+            else:
+                content_args['data'] = content
 
-        url = 'objects/%s/datastreams/%s?' % (pid, dsID) + _safe_urlencode(http_args)
-        with self.open('POST', url, body, headers) as response:
-            # if a file object was opened to post data, close it now
-            if fp is not None:
-                fp.close()
-
-            # expected response: 201 Created (on success)
-            # when pid is invalid, response body contains error message
-            #  e.g., no path in db registry for [bogus:pid]
-            # return success/failure and any additional information
-            return (response.status == 201, response.read())
-
+            # set content-type header ? 
+            
+        url = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.post(url, params=http_args, **content_args)
+        # expected response: 201 Created (on success)
+        # when pid is invalid, response body contains error message
+        #  e.g., no path in db registry for [bogus:pid]
+        # return success/failure and any additional information
+        return (r.status_code == requests.codes.created, r.content)
 
     # addRelationship not implemented in REST API
 
@@ -298,9 +358,9 @@ class REST_API(HTTP_API_Base):
         if encoding:
             http_args['encoding'] = encoding
         uri = 'objects/%s/export' % pid
-        if http_args:
-            uri += '?' + _safe_urlencode(http_args)
-        return self.read(uri)
+
+        r = self.get(uri, params=http_args)
+        return r.content, r.url
 
     def getDatastream(self, pid, dsID, asOfDateTime=None, validateChecksum=False):
         """Get information about a single datastream on a Fedora object; optionally,
@@ -318,9 +378,10 @@ class REST_API(HTTP_API_Base):
             http_args['validateChecksum'] = str(validateChecksum).lower()
         if asOfDateTime:
             http_args['asOfDateTime'] = datetime_to_fedoratime(asOfDateTime)
-        http_args.update(self.format_xml)        
-        uri = 'objects/%s/datastreams/%s' % (pid, dsID) + '?' + _safe_urlencode(http_args)
-        return self.read(uri)
+        http_args.update(self.format_xml)
+        uri = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.get(uri, params=http_args)
+        return r.content, r.url
 
     # getDatastreamHistory not implemented in REST API
 
@@ -341,8 +402,9 @@ class REST_API(HTTP_API_Base):
         if namespace:
             http_args['namespace'] = namespace
 
-        rel_url = 'objects/nextPID?' + _safe_urlencode(http_args)
-        return self.read(rel_url, data='')
+        url = 'objects/nextPID'
+        r = self.post(url, params=http_args)
+        return r.content, r.url
 
     def getObjectXML(self, pid):
         """
@@ -354,7 +416,9 @@ class REST_API(HTTP_API_Base):
            :rtype: string xml content of entire object
         """
         # /objects/{pid}/objectXML
-        return self.read('objects/%s/objectXML' % (pid,))
+        url = 'objects/%s/objectXML' % (pid,)
+        r = self.get(url)
+        return r.content, r.url
 
     # getRelationships not implemented in REST API
 
@@ -376,11 +440,9 @@ class REST_API(HTTP_API_Base):
 
         headers = { 'Content-Type': 'text/xml' }
 
-        url = 'objects/new?' + _safe_urlencode(http_args)
-        with self.open('POST', url, text, headers) as response:
-            pid = response.read()
-
-        return pid
+        url = 'objects/new'
+        r = self.post(url, text, params=http_args, headers=headers)
+        return r.content  # content is new pid
 
     def modifyDatastream(self, pid, dsID, dsLabel=None, mimeType=None, logMessage=None, dsLocation=None,
         altIDs=None, versionable=None, dsState=None, formatURI=None, checksumType=None,
@@ -422,27 +484,30 @@ class REST_API(HTTP_API_Base):
         if force:
             http_args['force'] = force
 
-        headers = {}
-        body = None
+        content_args = {}
         if content:
+            # content can be either a string or a file-like object
             if hasattr(content, 'read'):    # allow content to be a file
                 # warn about missing checksums for files
                 if not checksum:
-                    logging.warning("File was ingested into fedora without a passed checksum for validation, pid was: %s and dsID was: %s." % (pid, dsID))
-            # body can be either a string or a file-like object (http connection class will handle either)
-            body = content
-            headers = { 'Content-Type' : mimeType,
-                        # let http connection class calculate the content-length for us (deal with file or string)
-                        #'Content-Length' : str(len(body))
-                        }
+                    logging.warning("Updating datastream %s/%s with a file, but no checksum passed" \
+                                    % (pid, dsID))
 
+                # FIXME: Fedora does not seem to accept multipart file content from PUT
+                # the way requests wants to send it...
+                # This will cause problems for large datastreams...
+                content_args['data'] = content.read()
+                #content_args['files'] = {'file': content}
+            else:
+                content_args['data'] = content
 
-        url = 'objects/%s/datastreams/%s?' % (pid, dsID) + _safe_urlencode(http_args)
-        with self.open('PUT', url, body, headers) as response:
-            # expected response: 200 (success)
-            # response body contains error message, if any
-            # return success/failure and any additional information
-            return (response.status == 200, response.read())        
+        url = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.put(url, params=http_args, **content_args)
+
+        # expected response: 200 (success)
+        # response body contains error message, if any
+        # return success/failure and any additional information
+        return (r.status_code == requests.codes.ok, r.content)
 
     def modifyObject(self, pid, label, ownerId, state, logMessage=None):
         # /objects/{pid} ? [label] [ownerId] [state] [logMessage]
@@ -451,10 +516,12 @@ class REST_API(HTTP_API_Base):
                     'state' : state}
         if logMessage is not None:
             http_args['logMessage'] = logMessage
-        url = 'objects/%s' % (pid,) + '?' + _safe_urlencode(http_args)
-        with self.open('PUT', url, '', {}) as response:
-            # returns response code 200 on success
-            return response.status == 200
+            
+        url = 'objects/%s' % (pid,)
+        r = self.put(url, params=http_args, prefetch=True)
+        # prefetch to immediately release the connection, since we
+        # won't actually read the response content
+        return r.status_code == requests.codes.ok
 
     def purgeDatastream(self, pid, dsID, startDT=None, endDT=None, logMessage=None,
             force=False):
@@ -481,18 +548,18 @@ class REST_API(HTTP_API_Base):
         if force:
             http_args['force'] = force
 
-        url = 'objects/%s/datastreams/%s' % (pid, dsID) + '?' + _safe_urlencode(http_args)
-        with self.open('DELETE', url, '', {}) as response:
-            # as of Fedora 3.4, returns 200 on success with a list of the
-            # timestamps for the versions deleted as response content
-            # NOTE: response content may be useful on error, e.g.
-            #       no path in db registry for [bogus:pid]
-            # is there any useful way to pass this info back?
-            # *NOTE*: bug when purging non-existent datastream on a valid pid
-            # - reported here: http://www.fedora-commons.org/jira/browse/FCREPO-690
-            # - as a possible work-around, could return false when status = 200
-            #   but response body is an empty list (i.e., no datastreams/versions purged)
-            return response.status == 200, response.read()
+        url = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.delete(url, params=http_args)
+        # as of Fedora 3.4, returns 200 on success with a list of the
+        # timestamps for the versions deleted as response content
+        # NOTE: response content may be useful on error, e.g.
+        #       no path in db registry for [bogus:pid]
+        # is there any useful way to pass this info back?
+        # *NOTE*: bug when purging non-existent datastream on a valid pid
+        # - reported here: http://www.fedora-commons.org/jira/browse/FCREPO-690
+        # - as a possible work-around, could return false when status = 200
+        #   but response body is an empty list (i.e., no datastreams/versions purged)
+        return r.status_code == requests.codes.ok, r.content
 
     def purgeObject(self, pid, logMessage=None):
         """
@@ -508,28 +575,29 @@ class REST_API(HTTP_API_Base):
         if logMessage:
             http_args['logMessage'] = logMessage
 
-        url = 'objects/' + pid  + '?' + _safe_urlencode(http_args)
-        with self.open('DELETE', url, '', {}) as response:
-            # as of Fedora 3.4, returns 200 on success; response content is timestamp
-            return response.status == 200, response.read()
+        url = 'objects/%s' % (pid, )
+        r = self.delete(url, params=http_args)
+        # as of Fedora 3.4, returns 200 on success; response content is timestamp
+        return r.status_code == requests.codes.ok, r.content
 
     # purgeRelationship not implemented in REST API
 
     def setDatastreamState(self, pid, dsID, dsState):
         # /objects/{pid}/datastreams/{dsID} ? [dsState]
         http_args = { 'dsState' : dsState }
-        url = 'objects/%s/datastreams/%s' % (pid, dsID) + '?' + _safe_urlencode(http_args)
-        with self.open('PUT', url, '', {}) as response:
-            # returns response code 200 on success
-            return response.status == 200
+
+        url = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.put(url, params=http_args)  # prefetch ?
+        # returns response code 200 on success
+        return r.status_code == requests.codes.ok
 
     def setDatastreamVersionable(self, pid, dsID, versionable):
         # /objects/{pid}/datastreams/{dsID} ? [versionable]
         http_args = { 'versionable' : versionable }
-        url = 'objects/%s/datastreams/%s' % (pid, dsID) + '?' + _safe_urlencode(http_args)
-        with self.open('PUT', url, '', {}) as response:
-            # returns response code 200 on success
-            return response.status == 200
+        url = 'objects/%s/datastreams/%s' % (pid, dsID)
+        r = self.put(url, params=http_args)
+        # returns response code 200 on success
+        return r.status_code == requests.codes.ok
 
 
 # NOTE: the "LITE" APIs are planned to be phased out; when that happens, these functions
@@ -546,40 +614,22 @@ class API_A_LITE(HTTP_API_Base):
         :rtype: string
         """
         http_args = { 'xml': 'true' }
-        return self.read('describe?' + _safe_urlencode(http_args))
-
-
-class _NamedMultipartParam(MultipartParam):
-    # Fedora API_M_LITE upload fails (as of v3.2.1) if passed a file with no
-    # filename in its Content-Disposition. This MultipartParam forces a
-    # filename of 'None' if none is specified to work around that problem.
-    # This is necessary for calling API_M_LITE.upload on string data, since
-    # poster otherwise encodes those without any filename.
-    def __init__(self, name, value=None, filename=None, *args, **kwargs):
-        if filename is None:
-            filename = 'None'
-
-        super_init = super(_NamedMultipartParam, self).__init__
-        super_init(name, value, filename, *args, **kwargs)
-
+        r = self.get('describe', params=http_args)
+        return r.content, r.url
 
 class API_M_LITE(HTTP_API_Base):
     def upload(self, data):
         url = 'management/upload'
 
-        # use poster multi-part encode to build the headers and a generator
-        # for body content, in order to handle posting large files that
-        # can't be read into memory all at once. use _NamedMultipartParam to
-        # force a filename as described above.
-        post_params = _NamedMultipartParam.from_params({'file':data})
-        body, headers = multipart_encode(post_params)
-
-        with self.open('POST', url, body, headers=headers) as response:
-            # returns 201 Created on success
-            # return response.status == 201
-            # content of response should be upload id, if successful
-            resp_data = response.read()
-            return resp_data.strip()
+        # fedora only expects content uploaded as multipart file
+        # - make string content into a file-like object so requests.post
+        # sends it the way Fedora expects.
+        if not hasattr(data, 'read'):
+            data = StringIO(data)
+        r = self.post(url, files={'file': data})
+        # returns 201 Created on success
+        # content of response should be upload id, if successful
+        return r.content.strip()
 
 
 # return object for getRelationships soap call
@@ -693,9 +743,9 @@ class AuthSoapClient(SimpleSoapClient):
 
 
 class API_M(ServiceClient):
-    def __init__(self, opener):
-        self.auth_headers = auth_headers(opener.username, opener.password)
-        urlparts = urlsplit(opener.base_url)
+    def __init__(self, base_url, username=None, password=None):
+        self.auth_headers = auth_headers(username, password)
+        urlparts = urlsplit(base_url)
         hostname = urlparts.hostname
         api_path = urlparts.path + 'services/management'
         if urlparts.port:
@@ -711,9 +761,9 @@ class API_M(ServiceClient):
 
 class ApiFacade(REST_API, API_A_LITE, API_M_LITE, API_M): # there is no API_A today
     """Pull together all Fedora APIs into one place."""
-    def __init__(self, opener):
-        HTTP_API_Base.__init__(self, opener)
-        API_M.__init__(self, opener)
+    def __init__(self, base_url, username=None, password=None):
+        HTTP_API_Base.__init__(self, base_url, username, password)
+        API_M.__init__(self, base_url, username, password)
 
 
 
@@ -785,18 +835,17 @@ class ResourceIndex(HTTP_API_Base):
         http_args['flush'] = 'true' if flush else 'false'
         
         risearch_url = 'risearch?'
-        rel_url = risearch_url + urlencode(http_args)
         try:
-            data, abs_url = self.read(rel_url)
+            r = self.get(risearch_url, params=http_args)
             # parse the result according to requested format
             if format == 'N-Triples':
-                return parse_rdf(data, abs_url, format='n3')
+                return parse_rdf(r.content, r.url, format='n3')
             elif format == 'CSV':
                 # reader expects a file or a list; for now, just split the string
                 # TODO: when we can return url contents as file-like objects, use that
-                return csv.DictReader(data.split('\n'))
+                return csv.DictReader(r.iter_lines())
             elif format == 'count':
-                return int(data)
+                return int(r.content)
             
             # should we return the response as fallback? 
         except RequestFailed, f:

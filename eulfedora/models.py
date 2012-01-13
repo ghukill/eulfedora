@@ -410,7 +410,7 @@ class DatastreamObject(object):
                                                            return_http_response=True)
         # read and yield the response in chunks
         while True:
-            chunk = response.read(chunksize)
+            chunk = response.iter_content(chunksize)
             if not chunk:
                 return
             yield chunk
@@ -1076,7 +1076,8 @@ class DigitalObject(object):
     def risearch(self):
         "Instance of :class:`eulfedora.api.ResourceIndex`, with the same root url and credentials"
         if self._risearch is None:
-            self._risearch = ResourceIndex(self.api.opener)
+            self._risearch = ResourceIndex(self.api.base_url,
+                                           self.api.username, self.api.password)
         return self._risearch
 
     def get_object(self, pid, type=None):

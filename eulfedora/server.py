@@ -64,33 +64,12 @@ import warnings
 from eulfedora.rdfns import model as modelns
 from eulfedora.api import HTTP_API_Base, ApiFacade, ResourceIndex
 from eulfedora.models import DigitalObject
-from eulfedora.util import AuthorizingServerConnection, \
-     RelativeServerConnection, parse_xml_object, RequestFailed
+# from eulfedora.util import AuthorizingServerConnection, \
+#      RelativeServerConnection, parse_xml_object, RequestFailed
+from eulfedora.util import parse_xml_object, RequestFailed
 from eulfedora.xml import SearchResults, NewPids
 
 logger = logging.getLogger(__name__)
-
-_connection = None
-
-def init_pooled_connection(fedora_root=None):
-    '''Initialize pooled connection for use with :class:`Repository`.
-
-    :param fedora_root: base fedora url to use for connection.  If not specified,
-        uses FEDORA_ROOT from django settings
-    '''
-    global _connection
-    if fedora_root is None:
-        try:
-            from django.conf import settings
-            fedora_root = settings.FEDORA_ROOT
-        except ImportError:
-            raise Exception('Cannot initialize a Fedora connection without specifying ' +
-                            'Fedora root url directly or in Django settings as FEDORA_ROOT')
-
-    if not fedora_root.endswith('/'):
-        fedora_root = fedora_root + '/'
-    _connection = RelativeServerConnection(fedora_root)
-
 
 # a repository object, basically a handy facade for easy api access
 
@@ -141,19 +120,19 @@ class Repository(object):
     
     
     def __init__(self, root=None, username=None, password=None, request=None):
-        global _connection
         # when initialized via django, settings should be pulled from django conf
         if root is None:
-            # if global connection is not set yet, initialize it
-            if _connection is None:
-                init_pooled_connection()
-            root = _connection
-
-            # if username and password are not set, attempt to pull from django conf
-            if username is None and password is None:
-                try:
-                    from django.conf import settings
-                    from eulfedora import cryptutil
+            try:
+                from django.conf import settings
+                from eulfedora import cryptutil
+                
+                root = getattr(settings, 'FEDORA_ROOT', None)
+                if root is None:
+                    raise Exception('Cannot initialize a Fedora connection without specifying ' +
+                        'Fedora root url directly or in Django settings as FEDORA_ROOT')
+                
+                # if username and password are not set, attempt to pull from django conf
+                if username is None and password is None:
                     
                     if request is not None and request.user.is_authenticated() and \
                        FEDORA_PASSWORD_SESSION_KEY in request.session:
@@ -168,17 +147,16 @@ class Repository(object):
                     if hasattr(settings, 'FEDORA_PIDSPACE'):
                         self.default_pidspace = settings.FEDORA_PIDSPACE
 
-                except ImportError:
-                    pass
+            except ImportError:
+                pass
                 
         if root is None:
             raise Exception('Could not determine Fedora root url from django settings or parameter')
 
         logger.debug("Connecting to fedora at %s %s" % (root,
                       'as %s' % username if username else '(no user credentials)'))
-        self.opener = AuthorizingServerConnection(root, username, password)
-        self.api = ApiFacade(self.opener)
-        self.fedora_root = self.opener.base_url
+        self.api = ApiFacade(root, username, password)
+        self.fedora_root = self.api.base_url
 
         self.username = username
         self.password = password
@@ -188,7 +166,7 @@ class Repository(object):
     def risearch(self):
         "instance of :class:`eulfedora.api.ResourceIndex`, with the same root url and credentials"
         if self._risearch is None:
-            self._risearch = ResourceIndex(self.opener)
+            self._risearch = ResourceIndex(self.fedora_root, self.username, self.password)
         return self._risearch
 
     def get_next_pid(self, namespace=None, count=None):

@@ -22,17 +22,18 @@ from dateutil.tz import tzutc
 import httplib
 from lxml import etree
 import re
+import requests
 from time import sleep
 import tempfile
 import warnings
 
-from test_fedora.base import FedoraTestCase, load_fixture_data, FEDORA_ROOT_NONSSL,\
-                FEDORA_USER, FEDORA_PASSWORD, FEDORA_PIDSPACE
+from test_fedora.base import FedoraTestCase, load_fixture_data, FEDORA_ROOT, \
+     FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD, FEDORA_PIDSPACE
 from eulfedora.api import REST_API, API_A_LITE, API_M_LITE, API_M, ResourceIndex, \
      UnrecognizedQueryLanguage
 from eulfedora.models import DigitalObject
 from eulfedora.rdfns import model as modelns
-from eulfedora.util import AuthorizingServerConnection, fedoratime_to_datetime, \
+from eulfedora.util import fedoratime_to_datetime, \
      datetime_to_fedoratime, RequestFailed, ChecksumMismatch
 from eulfedora.xml import FEDORA_MANAGE_NS, FEDORA_ACCESS_NS
 from testcore import main
@@ -53,26 +54,19 @@ Hey, nonny-nonny."""
 
     def _add_text_datastream(self):        
         # add a text datastream to the current test object - used by multiple tests
-        FILE = tempfile.NamedTemporaryFile(mode="w", suffix=".txt")
-        FILE.write(self.TEXT_CONTENT)
-        FILE.flush()
-
         # info for calling addDatastream, and return
         ds = {'id' : 'TEXT', 'label' : 'text datastream', 'mimeType' : 'text/plain',
             'controlGroup' : 'M', 'logMessage' : "creating new datastream",
             'checksumType' : 'MD5'}
-
         added = self.rest_api.addDatastream(self.pid, ds['id'], ds['label'],
-            ds['mimeType'], ds['logMessage'], ds['controlGroup'], filename=FILE.name,
-            checksumType=ds['checksumType'])
-        FILE.close()
+                ds['mimeType'], ds['logMessage'], ds['controlGroup'],
+                content=self.TEXT_CONTENT, checksumType=ds['checksumType'])
         return (added, ds)
 
     def setUp(self):
         super(TestREST_API, self).setUp()
         self.pid = self.fedora_fixtures_ingested[0]
-        self.opener = AuthorizingServerConnection(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
-        self.rest_api = REST_API(self.opener)
+        self.rest_api = REST_API(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
         self.today = datetime.utcnow().date()
 
     # API-A calls
@@ -128,10 +122,10 @@ Hey, nonny-nonny."""
 
         # return_http_response
         response = self.rest_api.getDatastreamDissemination(self.pid, 'DC', return_http_response=True)
-        self.assert_(isinstance(response, httplib.HTTPResponse),
-                     'getDatastreamDissemination should return an HTTPResponse when return_http_response is True')
+        self.assert_(isinstance(response, requests.Response),
+                     'getDatastreamDissemination should return a requests.Response when return_http_response is True')
         # datastream content should still be accessible
-        self.assertEqual(dc, response.read())
+        self.assertEqual(dc, response.content)
 
     # NOTE: getDissemination not available in REST API until Fedora 3.3
     def test_getDissemination(self):
@@ -143,10 +137,10 @@ Hey, nonny-nonny."""
         # return_http_response
         response = self.rest_api.getDissemination(self.pid, "fedora-system:3", "viewItemIndex",
                                                   return_http_response=True)
-        self.assert_(isinstance(response, httplib.HTTPResponse),
-                     'getDissemination should return an HTTPResponse when return_http_response is True')
+        self.assert_(isinstance(response, requests.Response),
+                     'getDissemination should return a requests.Response when return_http_response is True')
         # datastream content should still be accessible
-        self.assert_(self.pid in response.read())
+        self.assert_(self.pid in response.content)
 
     def test_getObjectHistory(self):
         history, url = self.rest_api.getObjectHistory(self.pid)
@@ -249,15 +243,6 @@ Hey, nonny-nonny."""
                 'calling addDatastream with checksum but no checksum type should generate a warning')
             self.assert_('Fedora will ignore the checksum' in str(w[0].message))
         
-        # attempt to add to a non-existent object
-        FILE = tempfile.NamedTemporaryFile(mode="w", suffix=".txt")
-        FILE.write("bogus")
-        FILE.flush()
-        self.assertRaises(RequestFailed, self.rest_api.addDatastream, 'bogus:pid',
-                          'TEXT', 'text datastream',
-                          mimeType='text/plain', logMessage='creating new datastream',
-                          controlGroup='M', filename=FILE.name)
-        FILE.close()
 
     def test_compareDatastreamChecksum(self):
         # create datastream with checksum
@@ -366,8 +351,11 @@ So be you blythe and bonny, singing hey-nonny-nonny."""
         FILE.flush()
 
         # modify managed datastream by file
-        updated, msg = self.rest_api.modifyDatastream(self.pid, ds['id'], "text datastream (modified)",
-            mimeType="text/other", logMessage="modifying TEXT datastream", content=open(FILE.name))
+        with open(FILE.name) as f:
+            updated, msg = self.rest_api.modifyDatastream(self.pid, ds['id'],
+                                                          "text datastream (modified)",
+                mimeType="text/other", logMessage="modifying TEXT datastream",
+                                                          content=f)
         self.assertTrue(updated)
         # log message in audit trail
         xml, url = self.rest_api.getObjectXML(self.pid)
@@ -532,8 +520,7 @@ class TestAPI_A_LITE(FedoraTestCase):
     def setUp(self):
         super(TestAPI_A_LITE, self).setUp()
         self.pid = self.fedora_fixtures_ingested[0]
-        self.opener = AuthorizingServerConnection(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
-        self.api_a = API_A_LITE(self.opener)
+        self.api_a = API_A_LITE(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
 
     def testDescribeRepository(self):
         desc, url = self.api_a.describeRepository()
@@ -549,7 +536,7 @@ class TestAPI_M_LITE(FedoraTestCase):
     def setUp(self):
         super(TestAPI_M_LITE, self).setUp()
         self.pid = self.fedora_fixtures_ingested[0]
-        self.api_m = API_M_LITE(self.opener)
+        self.api_m = API_M_LITE(FEDORA_ROOT, FEDORA_USER, FEDORA_PASSWORD)
 
     def testUploadString(self):
         data = "Here is some temporary content to upload to fedora."
@@ -585,9 +572,8 @@ class TestAPI_M(FedoraTestCase):
     def setUp(self):
         super(TestAPI_M, self).setUp()
         self.pid = self.fedora_fixtures_ingested[0]
-        self.api_m = API_M(self.opener)
-        self.opener = AuthorizingServerConnection(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
-        self.rest_api = REST_API(self.opener)
+        self.api_m = API_M(FEDORA_ROOT, FEDORA_USER, FEDORA_PASSWORD)
+        self.rest_api = REST_API(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
 
         # get fixture ingest time from the server the hard way for testing
         dsprofile_data, url = self.rest_api.getDatastream(self.pid, "DC")
