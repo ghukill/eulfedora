@@ -76,14 +76,20 @@ class HTTP_API_Base(object):
         self.base_url = base_url
         self.username = username
         self.password = password
-        self.extra_request_args = {
+        self.session_options = {
             'verify': True  # verify SSL certs by default
         }
         # TODO: custom user agent to identify eulfedora/version ?
         # (default requests User-Agent is python-requests/version)
         if self.username is not None:
             # store basic auth option to pass when making requests
-            self.extra_request_args['auth'] = (self.username, self.password)
+            self.session_options['auth'] = (self.username, self.password)
+
+        # create a session for all requests so we can take advantage of
+        # connection pooling
+        # TODO: can we create/share this session at a higher level?
+        self.session = requests.session(**self.session_options)
+        
 
     def absurl(self, rel_url):
         return urljoin(self.base_url, rel_url)
@@ -107,7 +113,7 @@ class HTTP_API_Base(object):
     # - add auth, make urls absolute
 
     def _make_request(self, reqmeth, url, *args, **kwargs):
-        kwargs.update(self.extra_request_args)
+
         response = reqmeth(self.prep_url(url), *args, **kwargs)
 
         # FIXME: handle 3xx (?) [possibly handled for us by requests]
@@ -130,16 +136,16 @@ class HTTP_API_Base(object):
         return response
 
     def get(self, *args, **kwargs):
-        return self._make_request(requests.get, *args, **kwargs)
+        return self._make_request(self.session.get, *args, **kwargs)
     
     def put(self, *args, **kwargs):
-    	return self._make_request(requests.put, *args, **kwargs)
+    	return self._make_request(self.session.put, *args, **kwargs)
         
     def post(self, *args, **kwargs):
-        return self._make_request(requests.post, *args, **kwargs)
+        return self._make_request(self.session.post, *args, **kwargs)
 
     def delete(self, *args, **kwargs):
-        return self._make_request(requests.delete, *args, **kwargs)
+        return self._make_request(self.session.delete, *args, **kwargs)
 
     # also available: head, patch
     
