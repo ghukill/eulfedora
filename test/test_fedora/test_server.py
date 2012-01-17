@@ -17,6 +17,7 @@
 #   limitations under the License.
 
 from datetime import date
+from requests.exceptions import ConnectionError
 
 from test_fedora.base import FedoraTestCase, load_fixture_data, FEDORA_ROOT_NONSSL, FEDORA_PIDSPACE
 from eulfedora.rdfns import model as modelns
@@ -189,8 +190,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
         repo = Repository('http://bogus.host.name.foo:8080/fedora/')
-        # TODO: currently just a URLError; make test more specific if we add more specific exceptions
-        self.assertRaises(Exception, list, repo.find_objects(pid=pid))
+        self.assertRaises(ConnectionError, list, repo.find_objects(pid=pid))
         
         # FIXME: is there any way to test that RequestContextManager closes the connection?
 
