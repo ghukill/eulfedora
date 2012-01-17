@@ -404,17 +404,15 @@ class DatastreamObject(object):
     def get_chunked_content(self, chunksize=4096):
         '''Generator that returns the datastream content in chunks, so
         larger datastreams can be used without reading the entire
-        contents into memory.'''
+        contents into memory.  Returns the result of
+        :meth:`requests.Request.iter_content` with the specified chunk
+        size.
+        '''
         # get the datastream dissemination, but return the actual http response 
         response = self.obj.api.getDatastreamDissemination(self.obj.pid, self.id,
                                                            return_http_response=True)
-        # read and yield the response in chunks
-        while True:
-            chunk = response.iter_content(chunksize)
-            if not chunk:
-                return
-            yield chunk
-
+        # use the requests iter_content method - returns a generator
+        return response.iter_content(chunk_size=chunksize)
 
     def validate_checksum(self, date=None): 
         '''Check if this datastream has a valid checksum in Fedora, by
