@@ -78,8 +78,9 @@ class HTTP_API_Base(object):
         self.password = password
         self.extra_request_args = {
             'verify': True  # verify SSL certs by default
-            # TODO: custom user agent to identify eulfedora/version ? 
         }
+        # TODO: custom user agent to identify eulfedora/version ?
+        # (default requests User-Agent is python-requests/version)
         if self.username is not None:
             # store basic auth option to pass when making requests
             self.extra_request_args['auth'] = (self.username, self.password)
