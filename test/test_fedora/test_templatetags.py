@@ -18,6 +18,8 @@
 
 from StringIO import StringIO
 import unittest
+from mock import Mock, MagicMock
+import requests
 
 from django.template import Context, Template
 
@@ -27,23 +29,11 @@ from eulfedora.server import Repository
 
 from testcore import main
 
-class MockFedoraResponse(StringIO):
-    # The simplest thing that can possibly look like a Fedora response to
-    # eulcore.fedora.util
-    def __init__(self, status=500, reason='Cuz I said so',
-                 mimetype='text/plain', content=''):
-        StringIO.__init__(self, content)
-        self.status = status
-        self.reason = reason
-        self.mimetype = mimetype
-        self.msg = self # for self.msg.gettype()
-
-    def gettype(self):
-        return self.mimetype
-
 class MockFedoraObject(object):
     # not even a close approximation, just something we can force to raise
     # interesting exceptions
+    # NOTE: not using Mock here because mocks are callable and
+    # interact poorly with django templates
     def __init__(self):
         self._value = 'sample text'
 
@@ -72,12 +62,19 @@ class TemplateTagTest(unittest.TestCase):
         val = t.render(ctx)
         self.assertEqual(val.strip(), 'sample text')
 
-        response = MockFedoraResponse(status=401)
+        response = Mock(requests.Response)
+        response.status_code = 401
+        response.error = 'something bad'
+        response.headers = {'content-type': 'text/plain'}
+        response.content = ''
+        test_obj.side_effect = PermissionDenied(response)
         test_obj._value = PermissionDenied(response) # force test_obj.value to fail
         val = t.render(ctx)
         self.assertEqual(val.strip(), 'permission fallback')
 
-        response = MockFedoraResponse()
+        response.status_code = 500
+        response.error = 'something worse'
+        test_obj.side_effect = RequestFailed(response)
         test_obj._value = RequestFailed(response) # force test_obj.value to fail
         val = t.render(ctx)
         self.assertEqual(val.strip(), 'connection fallback')
