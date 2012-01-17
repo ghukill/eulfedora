@@ -16,9 +16,8 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-from StringIO import StringIO
 import unittest
-from mock import Mock, MagicMock
+from mock import Mock
 import requests
 
 from django.template import Context, Template
