@@ -77,7 +77,7 @@ class HTTP_API_Base(object):
         self.username = username
         self.password = password
         self.session_options = {
-            'verify': True  # verify SSL certs by default
+            #'verify': True  # verify SSL certs by default
         }
         # TODO: custom user agent to identify eulfedora/version ?
         # (default requests User-Agent is python-requests/version)
