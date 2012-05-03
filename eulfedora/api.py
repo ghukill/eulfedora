@@ -32,6 +32,7 @@ from poster.encode import multipart_encode, MultipartParam
 import requests
 from StringIO import StringIO
 
+from eulfedora import __version__ as eulfedora_version
 from eulfedora.util import auth_headers, datetime_to_fedoratime, \
      RequestFailed, parse_rdf, PermissionDenied, ChecksumMismatch, RequestFailed
 
@@ -70,26 +71,41 @@ def _get_items(query, doseq):
         else:
             yield k, str(v)
 
+_sessions = {}
+
 
 class HTTP_API_Base(object):
-    def __init__(self, base_url, username=None, password=None):
+    def __init__(self, base_url, username=None, password=None,
+                 session=None):
+        global _sessions
+
+        # standardize url format; ensure we have a trailing slash,
+        # adding one if necessary
+        if not base_url.endswith('/'):
+            base_url = base_url + '/'
+
+        # check for an existing session for this fedora 
+        if base_url in _sessions:
+            self.session = _sessions[base_url]
+        else:
+            # create a new session and add to global sessions
+            # NOTE: only headers that will be common for all requests
+            # to this fedora should be set in the session (i.e., do
+            # not include auth information here)
+            self.session = requests.session(headers={
+                'user-agent': 'eulfedora/%s (python-requests/%s)' % \
+	                (eulfedora_version, requests.__version__),
+                'verify': True,  # verify SSL certs by default
+            })
+            _sessions[base_url] = self.session
+        
         self.base_url = base_url
         self.username = username
         self.password = password
-        self.session_options = {
-            #'verify': True  # verify SSL certs by default
-        }
-        # TODO: custom user agent to identify eulfedora/version ?
-        # (default requests User-Agent is python-requests/version)
+        self.request_options = {}
         if self.username is not None:
             # store basic auth option to pass when making requests
-            self.session_options['auth'] = (self.username, self.password)
-
-        # create a session for all requests so we can take advantage of
-        # connection pooling
-        # TODO: can we create/share this session at a higher level?
-        self.session = requests.session(**self.session_options)
-        
+            self.request_options['auth'] = (self.username, self.password)
 
     def absurl(self, rel_url):
         return urljoin(self.base_url, rel_url)
@@ -113,8 +129,10 @@ class HTTP_API_Base(object):
     # - add auth, make urls absolute
 
     def _make_request(self, reqmeth, url, *args, **kwargs):
-
-        response = reqmeth(self.prep_url(url), *args, **kwargs)
+        # copy base request options and update with any keyword args
+        rqst_options = self.request_options.copy()
+        rqst_options.update(kwargs)
+        response = reqmeth(self.prep_url(url), *args, **rqst_options)
 
         # FIXME: handle 3xx (?) [possibly handled for us by requests]
         if response.status_code >= requests.codes.bad:  # 400 or worse
@@ -139,14 +157,14 @@ class HTTP_API_Base(object):
         return self._make_request(self.session.get, *args, **kwargs)
     
     def put(self, *args, **kwargs):
-    	return self._make_request(self.session.put, *args, **kwargs)
-        
+        return self._make_request(self.session.put, *args, **kwargs)
+    
     def post(self, *args, **kwargs):
         return self._make_request(self.session.post, *args, **kwargs)
-
+    
     def delete(self, *args, **kwargs):
         return self._make_request(self.session.delete, *args, **kwargs)
-
+    
     # also available: head, patch
     
 
