@@ -29,9 +29,18 @@ from getpass import getpass
 import os
 import signal
 import sys
+import threading
+from time import sleep
 
 try:
-    from progressbar import ProgressBar, Bar, Percentage, ETA, SimpleProgress, Timer
+    from progressbar import ProgressBar, Bar, Percentage, ETA, SimpleProgress, Timer, \
+         Widget
+
+    class ThreadCountWidget(Widget):
+        def update(self, pbar):
+            return '%d' % threading.active_count()
+
+
 except ImportError:
     ProgressBar = None
 
@@ -69,6 +78,10 @@ class FedoraChecksums(object):
                                  help='Quiet mode: only output summary report')
         common_args.add_argument('--max', '-m', type=int, metavar='N',
                                  help='Stop after processing the first %(metavar)s objects')
+        if ProgressBar:
+            common_args.add_argument('--thread-count', default=False, action='store_true',
+                                     dest='show_thread_count',
+                                     help='Display number of active threads in progress bar')
 
         common_args.add_argument('pids', metavar='PID', nargs='*',
                                  help='list specific pids to be checked (optional)')
@@ -125,7 +138,11 @@ class FedoraChecksums(object):
             object_pids = [pid for pid in self.args.pids]
         else:
             # otherwise, process all find-able objects
-            object_pids = list(repo.risearch.get_subjects(modelns.hasModel , self.object_model))
+            object_pids = list(repo.risearch.get_subjects(modelns.hasModel,
+                                                          self.object_model))
+
+        # dictionary of queued threads, keyed on object pid
+        self.threads = {}
 
         # initalize progress bar
         pid_pbar = None
@@ -134,13 +151,21 @@ class FedoraChecksums(object):
         if total >= 10 and ProgressBar and os.isatty(sys.stderr.fileno()):
             widgets = [Percentage(), ' (', SimpleProgress(), ')',
                        Bar(), ETA()]
+            # include thread count if requested
+            if self.args.show_thread_count:
+                widgets.extend([' (threads:', ThreadCountWidget(), ')'])
+                
             pid_pbar = ProgressBar(widgets = widgets, maxval=total).start()
 
+        self.in_progress = []
+        queued = 0  # count of # items queued (finished or not)
         for pid in object_pids:
             obj = repo.get_object(pid = pid)
             if not obj.exists:
                 print "Error: %s does not exist or is inaccessible" % pid
                 continue
+
+            queued += 1
             
             for dsid in obj.ds_list.iterkeys():
                 dsobj = obj.getDatastreamObject(dsid)
@@ -151,19 +176,33 @@ class FedoraChecksums(object):
                     
                 elif self.args.mode == 'repair':
                     self.repair_datastream(dsobj)
-                
-            self.stats['objects'] += 1
+
+
+            self.in_progress.append(obj.pid)
+            self.tally_completed_threads()
+            # check for completed objects and update progress
+            self.check_in_progress()
             
             if pid_pbar:
                 pid_pbar.update(self.stats['objects'])
 
             # if interrupted or at a specified max, quit
             if self.interrupted or \
-                   self.args.max and self.stats['objects'] == self.args.max:
+                   self.args.max and queued == self.args.max:
                 break
+
+        # wait until everything is finished
+        while self.in_progress:
+            sleep(1)
+            self.tally_completed_threads()
+            self.check_in_progress()
+            if pid_pbar:
+                pid_pbar.update(self.stats['objects'])
+
 
         if pid_pbar and not self.interrupted:
            pid_pbar.finish()
+
 
         # summarize what was done
         if self.args.mode == 'validate':
@@ -176,54 +215,65 @@ class FedoraChecksums(object):
             self.csv_file.close()
 
 
+    def tally_completed_threads(self):
+        # check for completed threads, update totals,
+        # and output information as appropriate
+        for pid, threads in self.threads.iteritems():
+            for t in threads: 
+                t.join(0)   # join with no timeout (i.e., already finished)
+                if t.is_alive():
+                    continue
+
+                # otherwise, thread has completed
+                self.threads[pid].remove(t)
+                    
+                if self.args.mode == 'validate':
+                    self.stats[t.status] += 1
+                    if not t.valid:
+                        if not self.args.quiet:
+                            print t.msg()
+                        if self.csv:
+                            self.csv.writerow(t.csv_data())
+                                    
+                elif self.args.mode == 'repair':
+                    if t.saved:
+                        self.stats['ds_updated'] += 1
+                    elif t.err:
+                        print t.err
+                        self.stats['ds_err'] += 1
+
+                        
+    def check_in_progress(self):
+        # check whether threads for in progress objects have
+        # completed, and update completed object count
+        for p in list(self.in_progress):
+            if p in self.threads and not self.threads[p]:
+                self.stats['objects'] += 1
+                del self.threads[p]
+                self.in_progress.remove(p)
+                
+            elif p not in self.threads:  # shouldn't really happen...
+                self.in_progress.remove(p)
+
     def validate_datastream(self, dsobj):
+        pid = dsobj.obj.pid
+        if pid not in self.threads:
+            self.threads[pid] = []
         if self.args.all_versions:
             # check every version of this datastream
             history = dsobj.obj.api.getDatastreamHistory(dsobj.obj.pid, dsobj.id)
             for ds in history.datastreams:
-                self.check_datastream(dsobj, ds.createDate)
+                check = CheckDatastream(dsobj, ds.createDate)
+                self.threads[pid].append(check)
+                check.start()
                 self.stats['ds_versions'] += 1
 
         else:
             # current version only
-            self.check_datastream(dsobj)
+            check = CheckDatastream(dsobj)
+            self.threads[pid].append(check)
+            check.start()
 
-    def check_datastream(self, dsobj, date=None):
-        '''Check the validity of a particular datastream.  Checks for
-        invalid datastreams using
-        :meth:`~eulfedora.models.DatastreamObject.validate_checksum`,
-        and for no checksum (checksum type of ``DISABLED`` and
-        checksum value of ``none``).  Optionally reports on the status
-        and/or adds it to CSV file, depending on the arguments the
-        script was called with.
-        
-        :param dsobj: :class:`~eulfedora.models.DatastreamObject` to
-        be checked :param date: optional date/time for a particular
-        version of the datastream to be checked; when not specified,
-        the current version will be checked
-        '''
-        if not dsobj.validate_checksum(date=date):
-            status = 'invalid'
-
-        # if the checksum in fedora is stored as DISABLED/none,
-        # validate_checksum will return True - but that may not be
-        # what we want, so report as missing.
-        elif dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none':
-            status = 'missing'
-            
-        else:
-            status = 'ok'
-            
-        self.stats[status] += 1
-
-        if status is not 'ok':
-            if not self.args.quiet:
-                print "%s/%s - %s checksum (%s)" % \
-                      (dsobj.obj.pid, dsobj.id, status, date or dsobj.created)
-
-            if self.csv:
-                self.csv.writerow([dsobj.obj.pid, dsobj.id, date or dsobj.created, status,
-                                   dsobj.mimetype, dsobj.versionable])
 
     def validation_summary(self):
         '''Summarize what was done when the script was run in
@@ -245,16 +295,12 @@ class FedoraChecksums(object):
 
         :param dsobj: :class:`~eulfedora.models.DatastreamObject`
         '''
-        if dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none':
-            dsobj.checksum_type = self.args.checksum_type
-            try:
-                saved = dsobj.save('updating missing checksum')
-                if saved:
-                    self.stats['ds_updated'] += 1
-            except Exception as e:
-                print 'Error saving %s/%s : %s' % \
-                      (dsobj.obj.pid, dsobj.id, e)
-                self.stats['ds_err'] += 1
+        pid = dsobj.obj.pid
+        if pid not in self.threads:
+            self.threads[pid] = []
+        repair = RepairDatastream(dsobj, self.args.checksum_type)
+        self.threads[pid].append(repair)
+        repair.start()
 
     def repair_summary(self):
         '''Summarize what was done when the script was run in
@@ -278,6 +324,85 @@ class FedoraChecksums(object):
             # report if script is in the middle of an object
             print 'Script will exit after processing the current object.'
             print '(Ctrl-C / Interrupt again to quit immediately)'
+
+
+class CheckDatastream(threading.Thread):
+    '''Check the validity of a particular datastream version.
+    Checks for invalid datastreams using
+    :meth:`~eulfedora.models.DatastreamObject.validate_checksum`,
+    and for no checksum (checksum type of ``DISABLED`` and
+    checksum value of ``none``).
+    
+    :param dsobj: :class:`~eulfedora.models.DatastreamObject` to
+	be checked
+    :param date: optional date/time for a particular version of the
+        datastream to be checked; when not specified, the current version
+        will be checked
+    '''
+    
+
+    def __init__(self, dsobj, date=None):
+        super(CheckDatastream, self).__init__()
+        self.status = 'unchecked'
+        self.dsobj = dsobj
+        self.date = date
+
+    def run(self):
+        '''Validate the checksum and set status to one of ``invalid``,
+        ``missing``, or ``ok``.'''
+        if not self.dsobj.validate_checksum(date=self.date):
+            self.status = 'invalid'
+
+        # if the checksum in fedora is stored as DISABLED/none,
+        # validate_checksum will return True - but that may not be
+        # what we want, so report as missing.
+        elif self.dsobj.checksum_type == 'DISABLED' or self.dsobj.checksum == 'none':
+            self.status = 'missing'
+            
+        else:
+            self.status = 'ok'
+
+    @property
+    def valid(self):
+        'boolean property indicating if the datastream was valid'
+        return self.status == 'ok'
+
+    def msg(self):
+        'Information to be displayed for verbose output'
+        return "%s/%s - %s checksum (%s)" % \
+               (self.dsobj.obj.pid, self.dsobj.id,
+                self.status, self.date or self.dsobj.created)
+
+    def csv_data(self):
+        'List of data fields to be added to CSV file'
+        return [self.dsobj.obj.pid, self.dsobj.id, self.date or self.dsobj.created,
+                self.status, self.dsobj.mimetype, self.dsobj.versionable]
+
+class RepairDatastream(threading.Thread):
+    '''Check for and repair a missing checksum on a single
+    datastream.  If checksum type is ``DISABLED`` and checksum
+    value is ``none``, update the checksum type and save the
+    datastream, prompting Fedora to calculate a new checksum of
+    the requested type.
+    
+    :param dsobj: :class:`~eulfedora.models.DatastreamObject`
+    '''
+    
+    def __init__(self, dsobj, checksum_type):
+        super(RepairDatastream, self).__init__()
+        self.saved = None
+        self.err = False
+        self.dsobj = dsobj
+        self.checksum_type = checksum_type
+
+    def run(self):
+        if self.dsobj.checksum_type == 'DISABLED' or self.dsobj.checksum == 'none':
+            self.dsobj.checksum_type = self.checksum_type
+            try:
+                self.saved = self.dsobj.save('updating missing checksum')
+            except Exception as e:
+                self.err = 'Error saving %s/%s : %r' % \
+                           (self.dsobj.obj.pid, self.dsobj.id, e)
 
 
 class PasswordAction(argparse.Action):
