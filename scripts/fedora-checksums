@@ -198,7 +198,7 @@ class FedoraChecksums(object):
 
                 if self.interrupted:
                     # update progressbar to show queued items
-                    pid_pbar.maxval = len(self.queued.keys())
+                    pid_pbar.maxval = max(len(self.queued.keys()), self.stats['objects'])
                     pid_pbar.update(self.stats['objects'])
                 break
 
@@ -349,11 +349,13 @@ class Reporter(threading.Thread):
                 self.process_finished_item(self.done.get())
                 
                 if self.pbar:
+                    # maxval/stats could get out of sync when interrupted
+                    self.pbar.maxval = max(self.pbar.maxval, self.stats['objects'])
                     self.pbar.update(self.stats['objects'])
 
                 self.done.task_done()
                 
-            except Queue.Empty:
+            except EmptyQueue:
                 sleep(1)        
 
     def process_finished_item(self, *args, **kwargs):
