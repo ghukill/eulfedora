@@ -96,6 +96,8 @@ class FedoraChecksums(object):
         v_parser.add_argument('--all-versions', '-a', dest='all_versions', action='store_true',
                               help='''Check all versions of datastreams
                               (by default, only current versions are checked)''')
+        v_parser.add_argument('--missing-only', dest='missing_only', action='store_true',
+                              help='''Only check for datastreams with no checksum''')
         # repair
         r_parser = subparsers.add_parser('repair',
                                          help='repair missing checksums',
@@ -130,7 +132,8 @@ class FedoraChecksums(object):
 
         if self.args.pids:
             # if pids were specified on the command line, use those
-            object_pids = [pid for pid in self.args.pids]
+            # get distinct pid list (only process each object once)
+            object_pids = set(pid for pid in self.args.pids)
         else:
             # otherwise, process all find-able objects
             object_pids = list(repo.risearch.get_subjects(modelns.hasModel,
@@ -253,7 +256,8 @@ class FedoraChecksums(object):
         if self.args.all_versions:
             totals += ', %(ds_versions)d datastream version(s)' % self.stats
         print totals
-        print '%(invalid)d invalid checksum(s)' % self.stats
+        if not self.args.missing_only:
+            print '%(invalid)d invalid checksum(s)' % self.stats
         print '%(missing)d datastream(s) with no checksum' % self.stats
 
 

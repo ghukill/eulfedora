@@ -28,7 +28,7 @@ from eulfedora.api import ResourceIndex
 from eulfedora.rdfns import model as modelns, relsext as relsextns, fedora_rels
 from eulfedora.util import parse_xml_object, parse_rdf, RequestFailed, datetime_to_fedoratime
 from eulfedora.xml import ObjectDatastreams, ObjectProfile, DatastreamProfile, \
-    NewPids, ObjectHistory, ObjectMethods, DsCompositeModel
+    NewPids, ObjectHistory, ObjectMethods, DsCompositeModel, FoxmlDigitalObject
 from eulxml.xmlmap.dc import DublinCore
 
 logger = logging.getLogger(__name__)
@@ -1025,8 +1025,10 @@ class DigitalObject(object):
                 self.default_pidspace = default_pidspace
             except AttributeError:
                 # allow extending classes to make default_pidspace a custom property,
-                # but warn in case of conflict
-                logger.warn("Failed to set requested default_pidspace %s" % default_pidspace)
+                # but warn if there is case of conflict 
+                if default_pidspace != getattr(self, 'default_pidspace', None):
+                    logger.warn("Failed to set requested default_pidspace %s (using %s instead)" \
+                                % (default_pidspace, self.default_pidspace))
         # cache object profile, track if it is modified and needs to be saved
         self._info = None
         self.info_modified = False
@@ -1037,6 +1039,8 @@ class DigitalObject(object):
         # object history
         self._history = None
         self._methods = None
+        # object foxml
+        self._object_xml = None
 
         # pid = None signals to create a new object, using a default pid
         # generation function.
@@ -1281,6 +1285,62 @@ class DigitalObject(object):
         self._history = [c for c in history.changed]
         return history
 
+    @property
+    def object_xml(self):
+        '''Fedora object XML as an instance of :class:`FoxmlDigitalObject`.
+        (via :meth:`REST_API. getObjectXML`).
+        '''
+        if self._object_xml is None:
+            self.getObjectXml()
+        return self._object_xml
+    
+    def getObjectXml(self):
+        if self._create:
+            return None
+        else:
+            data, url = self.api.getObjectXML(self.pid)
+            self._object_xml = parse_xml_object(FoxmlDigitalObject, data, url)
+            return self._object_xml
+        
+    @property
+    def audit_trail(self):
+        '''Fedora audit trail as an instance of :class:`eulfedora.xml.AuditTrail`
+
+        .. Note::
+
+          Since Fedora (as of 3.5) does not make the audit trail
+          available via an API call or as a datastream, accessing the
+          audit trail requires loading the foxml for the object.  If
+          an object has large, versioned XML datastreams this may be
+          slow.
+        '''
+        # NOTE: It would be nice to expose the audit trail so that it
+        # looks and behaves a bit more like other datastreams (pseudo
+        # or read-only DatastreamObject?).  At the moment, the overhead
+        # for that doesn't seem worth the possible benefits.
+        # Fedora may eventually expose the AUDIT info more directly:
+        #   https://jira.duraspace.org/browse/FCREPO-635
+        if self.object_xml:
+            return self.object_xml.audit_trail
+
+    @property
+    def ingest_user(self):
+        '''Username responsible for ingesting this object into the repository,
+        as recorded in the :attr:`audit_trail`, if available.'''
+        # if there is an audit trail and it has records and the first
+        # action is ingest, return the user
+        if self.audit_trail and self.audit_trail.records \
+           and self.audit_trail.records[0].action == 'ingest':
+            return self.audit_trail.records[0].user
+
+    @property
+    def audit_trail_users(self):
+        '''A set of all usernames recorded in the :attr:`audit_trail`,
+        if available.'''
+        if self.audit_trail:
+            return set([r.user for r in self.audit_trail.records])
+        return set()
+
     def getProfile(self):    
         """Get information about this object (label, owner, date created, etc.).
 
@@ -1373,6 +1433,13 @@ class DigitalObject(object):
             if not profile_saved:
                 cleaned = self._undo_save(saved, "failed to save object profile, rolling back changes")
                 raise DigitalObjectSaveFailure(self.pid, "object profile", to_save, saved, cleaned)
+
+            
+        if saved or (self.info_modified and profile_saved):
+            # clear out any cached object info that is now out of date
+            self._history = None
+            self._object_xml = None
+            
             
 
     def _undo_save(self, datastreams, logMessage=None):

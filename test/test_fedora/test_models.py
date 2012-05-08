@@ -30,7 +30,8 @@ from eulfedora import models
 from eulfedora.api import ApiFacade
 from eulfedora.rdfns import relsext, model as modelns
 from eulfedora.util import RequestFailed, fedoratime_to_datetime
-from eulfedora.xml import ObjectDatastream, FEDORA_MANAGE_NS
+from eulfedora.xml import ObjectDatastream, FEDORA_MANAGE_NS, FoxmlDigitalObject, \
+     AuditTrail, AuditTrailRecord
 from eulxml.xmlmap.dc import DublinCore
 
 from test_fedora.base import FedoraTestCase, FEDORA_PIDSPACE, FIXTURE_ROOT
@@ -39,6 +40,7 @@ from testcore import main
 logger = logging.getLogger(__name__)
 
 ONE_SEC = timedelta(seconds=1)
+TWO_SECS = timedelta(seconds=2)
 
 class MyDigitalObject(models.DigitalObject):
     CONTENT_MODELS = ['info:fedora/%s:ExampleCModel' % FEDORA_PIDSPACE,
@@ -117,13 +119,13 @@ class TestDatastreams(FedoraTestCase):
         self.assertEqual(self.obj.dc.control_group, "X")
         # there may be micro-second variation between these two
         # ingest/creation times, but they should probably be less than
-        # a second apart
+        # a second or two apart
         try:
             self.assertAlmostEqual(self.ingest_time, self.obj.dc.created,
-                                   delta=ONE_SEC)
+                                   delta=TWO_SECS)
         except TypeError:
             # delta keyword unavailable before python 2.7
-            self.assert_(abs(self.ingest_time - self.obj.dc.created) < ONE_SEC)
+            self.assert_(abs(self.ingest_time - self.obj.dc.created) < TWO_SECS)
 
         # short-cut to datastream size
         self.assertEqual(self.obj.dc.info.size, self.obj.dc.size)
@@ -135,10 +137,10 @@ class TestDatastreams(FedoraTestCase):
         self.assertEqual(self.obj.text.control_group, "M")
         try:
             self.assertAlmostEqual(self.ingest_time, self.obj.text.created,
-                                   delta=ONE_SEC)
+                                   delta=TWO_SECS)
         except TypeError:
             # delta keyword unavailable before python 2.7
-            self.assert_(abs(self.ingest_time - self.obj.text.created) < ONE_SEC)
+            self.assert_(abs(self.ingest_time - self.obj.text.created) < TWO_SECS)
 
         # bootstrap info from defaults for a new object
         newobj = MyDigitalObject(self.api)
@@ -725,6 +727,50 @@ class TestDigitalObject(FedoraTestCase):
         self.assert_(isinstance(self.obj.history, list))
         self.assert_(isinstance(self.obj.history[0], datetime))
         self.assertEqual(self.ingest_time, self.obj.history[0])
+
+    def test_object_xml(self):
+        self.assert_(isinstance(self.obj.object_xml, FoxmlDigitalObject))
+
+        # uningested object has none
+        newobj = MyDigitalObject(self.api)
+        self.assertEqual(None, newobj.object_xml)
+
+    def test_audit_trail(self):
+        self.assert_(isinstance(self.obj.audit_trail, AuditTrail))
+        self.assert_(isinstance(self.obj.audit_trail.records[0], AuditTrailRecord))
+        # inspect the audit trail by adding text datastream in setup
+        audit = self.obj.audit_trail.records[0]
+        self.assertEqual('AUDREC1', audit.id)
+        self.assertEqual('Fedora API-M', audit.process_type)
+        self.assertEqual('addDatastream', audit.action)
+        self.assertEqual('TEXT', audit.component)
+        self.assertEqual('fedoraAdmin', audit.user)
+        self.assert_(isinstance(audit.date, datetime))
+        self.assertEqual('creating new datastream', audit.message)
+
+        # uningested object has none
+        newobj = MyDigitalObject(self.api)
+        self.assertEqual(None, newobj.audit_trail)
+
+        # test audit-trail derived properties
+        # no ingest message set, therefore no ingest user in audit trail
+        self.assertEqual(None, self.obj.ingest_user)
+        self.assertEqual(set(['fedoraAdmin']), self.obj.audit_trail_users)
+
+        # tweak xml in the audit trail to test
+        self.obj.audit_trail.records[0].action = 'ingest'
+        self.obj.audit_trail.records.extend([AuditTrailRecord(user='editor'),
+                                             AuditTrailRecord(user='manager'),
+                                             AuditTrailRecord(user='editor')])
+
+        self.assertEqual('fedoraAdmin', self.obj.ingest_user)
+        self.assertEqual(set(['fedoraAdmin', 'editor', 'manager']),
+                         self.obj.audit_trail_users)
+
+        # should not error when audit trail is not available
+        newobj = MyDigitalObject(self.api)
+        self.assertEqual(None, newobj.ingest_user)
+        self.assertEqual(set(), newobj.audit_trail_users)
 
     def test_methods(self):
         methods = self.obj.methods
