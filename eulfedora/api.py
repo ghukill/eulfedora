@@ -110,20 +110,8 @@ class HTTP_API_Base(object):
     def absurl(self, rel_url):
         return urljoin(self.base_url, rel_url)
 
-    def _sanitize_url(self, url):
-        # a unicode url will surprisingly make httplib.Connection raise an
-        # exception later if it tries to send a body that includes non-ascii
-        # characters. coerce the url into ascii so that doesn't happen
-        if isinstance(url, unicode):
-            url = url.encode('utf-8')
-        if not isinstance(url, basestring):
-            url = str(url)
-        # list derived from rfc 3987 "reserved" ebnf, plus "%" because we
-        # fail without that.
-        return urllib.quote(url, safe=":/?[]@!$&'()*+,;=%")
-
     def prep_url(self, url):
-        return self._sanitize_url(self.absurl(url))
+        return self.absurl(url)
 
     # thinnest possible wrappers around requests calls
     # - add auth, make urls absolute
