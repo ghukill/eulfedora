@@ -32,12 +32,11 @@ setup(
     packages=find_packages(),
 
     install_requires=[
-        'eulxml',
+        'eulxml>=0.18.0',
         'rdflib>=3.0',
         'python-dateutil',
-        'requests',
+        'requests>=0.13.1',
         'pycrypto',
-        'soaplib==0.8.1',
     ],
 
     # indexdata utils are optional. They include things like PDF text stripping (pyPdf).

@@ -15,15 +15,12 @@
 #   limitations under the License.
 
 from eulxml import xmlmap
-
-# FIXME: DateField still needs significant improvements before we can make
-# it part of the real xmlmap interface.
-from eulxml.xmlmap.fields import DateField
-from eulxml.xmlmap.fields import Field, SingleNodeManager, NodeMapper
+from eulxml.xmlmap.fields import Field, SingleNodeManager, NodeMapper, \
+                                 DateTimeField
 
 from eulfedora.util import datetime_to_fedoratime, fedoratime_to_datetime
 
-class FedoraDateMapper(xmlmap.fields.DateMapper):
+class FedoraDateMapper(xmlmap.fields.DateTimeMapper):
     def to_python(self, node):
         rep = self.XPATH(node)
         return fedoratime_to_datetime(rep)
@@ -170,8 +167,10 @@ class DatastreamProfile(_FedoraBase):
 class NewPids(_FedoraBase):
     """:class:`~eulxml.xmlmap.XmlObject` for a list of pids as returned by
     :meth:`REST_API.getNextPID`."""
-     # NOTE: default namespace as of 3.4 *should* be fedora manage, but does not appear to be
-    pids = xmlmap.StringListField('pid')
+    # NOTE: default namespace as of should be manage, but the
+    # namespace was missing until Fedora 3.5.  Match with or without a
+    # namespace, to support Fedora 3.5 as well as older versions.
+    pids = xmlmap.StringListField('pid|m:pid')
 
 
 class RepositoryDescriptionPid(_FedoraBase):
@@ -236,10 +235,23 @@ class SearchResults(_FedoraBase):
     "session token"
     cursor = xmlmap.IntegerField('t:listSession/t:cursor')
     "session cursor"
-    expiration_date = DateField('t:listSession/t:expirationDate')
+    expiration_date = DateTimeField('t:listSession/t:expirationDate')
     "session experation date"
     results = xmlmap.NodeListField('t:resultList/t:objectFields', SearchResult)
     "search results - list of :class:`SearchResult`"
+
+
+class DatastreamHistory(_FedoraBase):
+    """:class:`~eulxml.xmlmap.XmlObject` for datastream history
+    information returned by :meth:`REST_API.getDatastreamHistory`."""
+    # default namespace is fedora manage
+    ROOT_NAME = 'datastreamHistory'    
+    pid = xmlmap.StringField('@pid')
+    "pid"
+    dsid = xmlmap.StringField('@dsID')
+    "datastream id"
+    versions = xmlmap.NodeListField('m:datastreamProfile', DatastreamProfile)
+    'list of :class:`DatastreamProfile` objects for each version'
 
 
 DS_NAMESPACES = {'ds': FEDORA_DATASTREAM_NS }

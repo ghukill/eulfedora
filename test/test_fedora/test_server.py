@@ -17,9 +17,9 @@
 #   limitations under the License.
 
 from datetime import date
-from requests.exceptions import ConnectionError
 
-from test_fedora.base import FedoraTestCase, load_fixture_data, FEDORA_ROOT_NONSSL, FEDORA_PIDSPACE
+from test_fedora.base import FedoraTestCase, load_fixture_data, \
+     FEDORA_ROOT_NONSSL, FEDORA_PIDSPACE, FEDORA_USER, FEDORA_PASSWORD
 from eulfedora.rdfns import model as modelns
 from eulfedora.models import DigitalObject
 from eulfedora.server import Repository
@@ -182,7 +182,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
     def test_nonssl(self):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
-        repo = Repository(FEDORA_ROOT_NONSSL)
+        repo = Repository(FEDORA_ROOT_NONSSL, FEDORA_USER, FEDORA_PASSWORD)
         found = list(repo.find_objects(pid=pid))
         self.assertEqual(1, len(found))
 
@@ -190,7 +190,9 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
         repo = Repository('http://bogus.host.name.foo:8080/fedora/')
-        self.assertRaises(ConnectionError, list, repo.find_objects(pid=pid))
+        # NOTE: in older versions of requests, this raised a
+        # requests.exceptions.ConnectionError; getting a socket error here as of 0.13.6
+        self.assertRaises(IOError, list, repo.find_objects(pid=pid))
         
         # FIXME: is there any way to test that RequestContextManager closes the connection?
 
