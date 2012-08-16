@@ -114,8 +114,7 @@ class HTTP_API_Base(object):
         # copy base request options and update with any keyword args
         rqst_options = self.request_options.copy()
         rqst_options.update(kwargs)
-        # TEMPORARY: fixme!
-        response = reqmeth(self.prep_url(url), verify=False, *args, **rqst_options)
+        response = reqmeth(self.prep_url(url), *args, **rqst_options)
 
         # FIXME: handle 3xx (?) [possibly handled for us by requests]
         if response.status_code >= requests.codes.bad:  # 400 or worse
