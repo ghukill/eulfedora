@@ -22,7 +22,6 @@ from urlparse import urljoin, urlsplit
 import time
 import warnings
 
-from poster.encode import multipart_encode, MultipartParam
 import requests
 from StringIO import StringIO
 

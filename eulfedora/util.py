@@ -36,8 +36,6 @@ from rdflib import URIRef, Graph
 
 from eulxml import xmlmap
 
-from poster import streaminghttp
-
 logger = logging.getLogger(__name__)
 
 # utilities for making HTTP requests to fedora
