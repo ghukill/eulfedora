@@ -238,9 +238,8 @@ class FedoraChecksums(object):
             
         if self.args.all_versions:
             # check every version of this datastream
-            history = dsobj.obj.api.getDatastreamHistory(dsobj.obj.pid, dsobj.id)
-            for ds in history.datastreams:
-                self.todo_queue.put((pid, dsobj.id, ds.createDate))
+            for ds in dsobj.history().versions:
+                self.todo_queue.put((pid, dsobj.id, ds.created))
                 self.queued[pid] += 1
                 self.stats['ds_versions'] += 1
 
