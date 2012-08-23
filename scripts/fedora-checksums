@@ -238,10 +238,13 @@ class FedoraChecksums(object):
             
         if self.args.all_versions:
             # check every version of this datastream
-            for ds in dsobj.history().versions:
-                self.todo_queue.put((pid, dsobj.id, ds.created))
-                self.queued[pid] += 1
-                self.stats['ds_versions'] += 1
+            try:
+                for ds in dsobj.history().versions:
+                    self.todo_queue.put((pid, dsobj.id, ds.created))
+                    self.queued[pid] += 1
+                    self.stats['ds_versions'] += 1
+            except Exception as e:
+                print "error getting history for %s %r" % (pid, e)
 
         else:
             # current version only
@@ -404,17 +407,22 @@ class ValidationWorker(DatastreamWorker):
         obj = self.repo.get_object(pid)
         dsobj = obj.getDatastreamObject(dsid)
         
-        if not dsobj.validate_checksum(date=date):
-            status = 'invalid'
+        try:
+            if not dsobj.validate_checksum(date=date):
+                status = 'invalid'
 
-        # if the checksum in fedora is stored as DISABLED/none,
-        # validate_checksum will return True - but that may not be
-        # what we want, so report as missing.
-        elif dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none':
-            status = 'missing'
 
-        else:
-            status = 'ok'
+            # if the checksum in fedora is stored as DISABLED/none,
+            # validate_checksum will return True - but that may not be
+            # what we want, so report as missing.
+            elif dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none':
+                status = 'missing'
+
+            else:
+                status = 'ok'
+        except Exception as e:
+            status = 'error'
+            print "error validating checksum %s %s %r" % (pid, dsid, e)
 
         return ValidationResult(pid, dsid, date or dsobj.created, status,
                                 dsobj.mimetype, dsobj.versionable)
