@@ -413,7 +413,7 @@ class REST_API(HTTP_API_Base):
         http_args.update(self.format_xml)
         uri = 'objects/%s/datastreams/%s' % (pid, dsID)
         r = self.get(uri, params=http_args)
-        return r.content, uri
+        return r.content, r.url
 
     def getDatastreamHistory(self, pid, dsid, format=None):
         http_args = {}
@@ -424,7 +424,7 @@ class REST_API(HTTP_API_Base):
         # In Fedora 3.4.3, that 404s but /history does not
         uri = 'objects/%s/datastreams/%s/history' % (pid, dsid)
         r = self.get(uri, params=http_args)
-        return r.content, uri
+        return r.content, r.url
 
     # getDatastreams not implemented in REST API
 
