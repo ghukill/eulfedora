@@ -1,5 +1,5 @@
 # file eulfedora/util.py
-# 
+#
 #   Copyright 2010,2011 Emory University Libraries
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,24 +14,14 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-from contextlib import contextmanager
 from datetime import datetime
 from dateutil.tz import tzutc
-import httplib
 import logging
-import mimetypes
-import random
 import re
 import requests
-import string
-import threading
-import time
-import urllib
 from cStringIO import StringIO
 
 from base64 import b64encode
-from urlparse import urljoin, urlsplit
-
 from rdflib import URIRef, Graph
 
 from eulxml import xmlmap
@@ -40,25 +30,33 @@ logger = logging.getLogger(__name__)
 
 # utilities for making HTTP requests to fedora
 
+
+# FIXME: no longer needed with requests (?)
 def auth_headers(username, password):
     "Build HTTP basic authentication headers"
     if username and password:
         token = b64encode('%s:%s' % (username, password))
-        return { 'Authorization': 'Basic ' + token }
+        return {'Authorization': 'Basic ' + token}
     else:
         return {}
+
 
 class RequestFailed(IOError):
     '''An exception representing an arbitrary error while trying to access a
     Fedora object or datastream.
     '''
     error_regex = re.compile('<pre>.*\n(.*)\n', re.MULTILINE)
+
     def __init__(self, response):
         # init params:
         #  response = HttpResponse with the error information
-        super(RequestFailed, self).__init__('%d %s' % (response.status_code, response.error))
+
+        # NOTE: prior to requests 1.x we were using response.error, which doesn't
+        # exist anymore.  response.text is probably more than we actually want to include here.
+        # This will probably need to be revisited soon.
+        super(RequestFailed, self).__init__('%d %s' % (response.status_code, response.text))
         self.code = response.status_code
-        self.reason = response.error
+        self.reason = response.text
         if response.status_code == requests.codes.server_error:
             # when Fedora gives a 500 error, it includes a stack-trace - pulling first line as detail
             # NOTE: this is likely to break if and when Fedora error responses change
@@ -71,7 +69,7 @@ class RequestFailed(IOError):
                 if len(match):
                     self.detail = match[0]
 
-                    
+
 
 class PermissionDenied(RequestFailed):
     '''An exception representing a permission error while trying to access a
@@ -92,7 +90,7 @@ class ChecksumMismatch(RequestFailed):
         # Use find/substring to pull out the checksum mismatch information
         if self.error_label in self.detail:
             self.detail = self.detail[self.detail.find(self.error_label):]
- 
+
     def __str__(self):
         return self.detail
 
@@ -118,12 +116,12 @@ def parse_xml_object(cls, data, url):
 def datetime_to_fedoratime(datetime):
     # format a date-time in a format fedora can handle
     # make sure time is in UTC, since the only time-zone notation Fedora seems able to handle is 'Z'
-    utctime = datetime.astimezone(tzutc())      
+    utctime = datetime.astimezone(tzutc())
     return utctime.strftime('%Y-%m-%dT%H:%M:%S') + '.%03d' % (utctime.microsecond/1000) + 'Z'
 
 
 def fedoratime_to_datetime(rep):
-    if rep.endswith('Z'):       
+    if rep.endswith('Z'):
         rep = rep[:-1]      # strip Z for parsing
         tz = tzutc()
         # strptime creates a timezone-naive datetime

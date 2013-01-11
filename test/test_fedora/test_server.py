@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # file test_fedora/test_server.py
-# 
+#
 #   Copyright 2011 Emory University Libraries
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@
 #   limitations under the License.
 
 from datetime import date
+import requests
 
 from test_fedora.base import FedoraTestCase, load_fixture_data, \
      FEDORA_ROOT_NONSSL, FEDORA_PIDSPACE, FEDORA_USER, FEDORA_PASSWORD
@@ -30,7 +31,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
     pidspace = FEDORA_PIDSPACE	# will be used for any objects ingested with ingestFixture
 
     # TODO: test Repository initialization with and without django settings
-    
+
     def test_get_next_pid(self):
         pid = self.repo.get_next_pid()
         self.assertTrue(pid)
@@ -63,8 +64,8 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         # FIXME: how can we test logMessage arg to purge?
         #  -- have no idea where log message is actually stored... (if anywhere)
 
-    def test_get_object(self):       
-        
+    def test_get_object(self):
+
         testpid = "testpid:1"
         # without info:fedora/ prefix
         obj = self.repo.get_object(testpid)
@@ -75,15 +76,15 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         obj = self.repo.get_object("info:fedora/"+testpid)
         self.assertTrue(isinstance(obj, DigitalObject))
         self.assertEqual(obj.pid, testpid)
-        
+
         class MyDigitalObject(DigitalObject):
             pass
 
         # specified type
         obj = self.repo.get_object(testpid, MyDigitalObject)
         self.assertTrue(isinstance(obj, MyDigitalObject))
-        
-        # new object 
+
+        # new object
         obj = self.repo.get_object()
         self.assertTrue(isinstance(obj, DigitalObject))
         self.assertTrue(obj._create)
@@ -116,7 +117,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         obj.save()
         testpid = obj.pid
         self.append_test_pid(testpid)
-        
+
         obj = self.repo.get_object(testpid, type=self.repo.infer_object_subtype)
         self.assertTrue(isinstance(obj, SubclassedAnotherDigitalObject))
 
@@ -161,7 +162,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.assert_(len(objects) > 0)
         # invalid filter
         self.assertRaises(Exception, list, self.repo.find_objects(created__bogusfilter='foo'))
-        
+
 
     def test_get_objects_by_cmodel(self):
         self.ingestFixture("object-with-pid.foxml")
@@ -178,7 +179,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         # query by a non-existent cmodel
         no_cmodel = self.repo.get_objects_with_cmodel("control:NotARealCmodel")
         self.assertEqual([], no_cmodel)
-            
+
     def test_nonssl(self):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
@@ -190,14 +191,10 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
         repo = Repository('http://bogus.host.name.foo:8080/fedora/')
-        # NOTE: in older versions of requests, this raised a
-        # requests.exceptions.ConnectionError; getting a socket error here as of 0.13.6
-        self.assertRaises(IOError, list, repo.find_objects(pid=pid))
-        
+        self.assertRaises(requests.ConnectionError, list, repo.find_objects(pid=pid))
+
         # FIXME: is there any way to test that RequestContextManager closes the connection?
 
-
-     
 
 if __name__ == '__main__':
     main()

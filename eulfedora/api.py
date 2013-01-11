@@ -1,5 +1,5 @@
 # file eulfedora/api.py
-# 
+#
 #   Copyright 2010,2011 Emory University Libraries
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,22 +16,21 @@
 
 import csv
 import logging
-from os import path
 import urllib
-from urlparse import urljoin, urlsplit
-import time
+from urlparse import urljoin
 import warnings
 
 import requests
 from StringIO import StringIO
 
 from eulfedora import __version__ as eulfedora_version
-from eulfedora.util import auth_headers, datetime_to_fedoratime, \
-     RequestFailed, parse_rdf, PermissionDenied, ChecksumMismatch, RequestFailed
+from eulfedora.util import datetime_to_fedoratime, \
+     RequestFailed, parse_rdf, PermissionDenied, ChecksumMismatch
 
 logger = logging.getLogger(__name__)
 
 # low-level wrappers
+
 
 def _safe_urlencode(query, doseq=0):
     # utf-8 encode unicode values before passing them to urlencode.
@@ -43,6 +42,7 @@ def _safe_urlencode(query, doseq=0):
                for k, v in _get_items(query, doseq)]
     return urllib.urlencode(wrapped, doseq)
 
+
 def _safe_str(s):
     # helper for _safe_urlencode: utf-8 encode unicode strings, convert
     # non-strings to strings, and leave plain strings untouched.
@@ -51,6 +51,7 @@ def _safe_str(s):
     else:
         return str(s)
 
+
 def _get_items(query, doseq):
     # helper for _safe_urlencode: emulate urllib.urlencode "doseq" logic
     if hasattr(query, 'items'):
@@ -58,7 +59,7 @@ def _get_items(query, doseq):
     for k, v in query:
         if isinstance(v, basestring):
             yield k, v
-        elif doseq and iter(v): # if it's iterable
+        elif doseq and iter(v):  # if it's iterable
             for e in v:
                 yield k, e
         else:
@@ -77,21 +78,24 @@ class HTTP_API_Base(object):
         if not base_url.endswith('/'):
             base_url = base_url + '/'
 
-        # check for an existing session for this fedora 
+        # check for an existing session for this fedora
         if base_url in _sessions:
             self.session = _sessions[base_url]
         else:
             # create a new session and add to global sessions
-            # NOTE: only headers that will be common for all requests
-            # to this fedora should be set in the session (i.e., do
-            # not include auth information here)
-            self.session = requests.session(headers={
+            self.session = requests.Session()
+            # Set headers to be passed with every request
+            # NOTE: only headers that will be common for *all* requests
+            # to this fedora should be set in the session
+            # (i.e., do NOT include auth information here)
+            self.session.headers = {
                 'user-agent': 'eulfedora/%s (python-requests/%s)' % \
-	                (eulfedora_version, requests.__version__),
+                    (eulfedora_version, requests.__version__),
                 'verify': True,  # verify SSL certs by default
-            })
+            }
+
             _sessions[base_url] = self.session
-        
+
         self.base_url = base_url
         self.username = username
         self.password = password
@@ -136,18 +140,18 @@ class HTTP_API_Base(object):
 
     def get(self, *args, **kwargs):
         return self._make_request(self.session.get, *args, **kwargs)
-    
+
     def put(self, *args, **kwargs):
         return self._make_request(self.session.put, *args, **kwargs)
-    
+
     def post(self, *args, **kwargs):
         return self._make_request(self.session.post, *args, **kwargs)
-    
+
     def delete(self, *args, **kwargs):
         return self._make_request(self.session.delete, *args, **kwargs)
-    
+
     # also available: head, patch
-    
+
 
 class REST_API(HTTP_API_Base):
     """
@@ -157,7 +161,7 @@ class REST_API(HTTP_API_Base):
     # always return xml response instead of html version
     format_xml = { 'format' : 'xml'}
 
-    ### API-A methods (access) #### 
+    ### API-A methods (access) ####
     # describeRepository not implemented in REST, use API-A-LITE version
 
     def findObjects(self, query=None, terms=None, pid=True, chunksize=None, session_token=None):
@@ -178,7 +182,7 @@ class REST_API(HTTP_API_Base):
         """
         if query is not None and terms is not None:
             raise Exception("Cannot findObject with both query ('%s') and terms ('%s')" % (query, terms))
-        
+
         http_args = {'resultFormat': 'xml'}
         if query is not None:
             http_args['query'] = query
@@ -210,9 +214,9 @@ class REST_API(HTTP_API_Base):
            the request will be returned, instead of just the contents
            (e.g., if you want to deal with large datastreams in
            chunks).  Defaults to False.
-        :param extra_args: extra keyword args to be passed to request (e.g., 
-            specify ``prefetch=False`` to allow iterating over response content)
-    
+        :param extra_args: extra keyword args to be passed to request (e.g.,
+            specify ``stream=False`` to allow iterating over response content)
+
         """
         # TODO: Note that this loads the entire datastream content into
         # memory as a Python string. This will suck for very large
@@ -231,8 +235,8 @@ class REST_API(HTTP_API_Base):
         return r.content, r.url
 
     # NOTE: getDissemination was not available in REST API until Fedora 3.3
-    def getDissemination(self, pid, sdefPid, method, method_params={}, return_http_response=False):        
-        # /objects/{pid}/methods/{sdefPid}/{method} ? [method parameters]        
+    def getDissemination(self, pid, sdefPid, method, method_params={}, return_http_response=False):
+        # /objects/{pid}/methods/{sdefPid}/{method} ? [method parameters]
         uri = 'objects/%s/methods/%s/%s' % (pid, sdefPid, method)
         # if method_params:
         #     uri += '?' + _safe_urlencode(method_params)
@@ -282,7 +286,7 @@ class REST_API(HTTP_API_Base):
     def listMethods(self, pid, sdefpid=None):
         # /objects/{pid}/methods ? [format, datetime]
         # /objects/{pid}/methods/{sdefpid} ? [format, datetime]
-        
+
         ## NOTE: getting an error when sdefpid is specified; fedora issue?
         uri = 'objects/%s/methods' % pid
         if sdefpid:
@@ -304,7 +308,7 @@ class REST_API(HTTP_API_Base):
         if checksum is not None and checksumType is None:
             warnings.warn('Fedora will ignore the checksum (%s) because no checksum type is specified' \
                           % checksum)
-            
+
         http_args = {'dsLabel': dsLabel, 'mimeType': mimeType}
         if logMessage:
             http_args['logMessage'] = logMessage
@@ -337,8 +341,8 @@ class REST_API(HTTP_API_Base):
             else:
                 content_args['data'] = content
 
-            # set content-type header ? 
-            
+            # set content-type header ?
+
         url = 'objects/%s/datastreams/%s' % (pid, dsID)
         r = self.post(url, params=http_args, **content_args)
         # expected response: 201 Created (on success)
@@ -359,7 +363,7 @@ class REST_API(HTTP_API_Base):
         :param isLiteral: true if object is literal, false if it is a URI;
             Fedora has no default; this method defaults to False
         :param datatype: optional datatype for literal objects
-        
+
         :returns: boolean success
         """
 
@@ -466,7 +470,7 @@ class REST_API(HTTP_API_Base):
         Get information about relationships on an object.
 
         Wrapper function for `Fedora REST API getRelationships <https://wiki.duraspace.org/display/FEDORA34/REST+API#RESTAPI-getRelationships>`_
-        
+
         '''
         http_args = {}
         if subject is not None:
@@ -474,9 +478,9 @@ class REST_API(HTTP_API_Base):
         if predicate is not None:
             http_args['predicate'] = predicate
         if format is not None:
-            http_args['format'] = format            
-        
-        url = 'objects/%s/relationships' % (pid, ) 
+            http_args['format'] = format
+
+        url = 'objects/%s/relationships' % (pid, )
         r = self.get(url, params=http_args)
         return r.content, url
 
@@ -504,10 +508,10 @@ class REST_API(HTTP_API_Base):
 
     def modifyDatastream(self, pid, dsID, dsLabel=None, mimeType=None, logMessage=None, dsLocation=None,
         altIDs=None, versionable=None, dsState=None, formatURI=None, checksumType=None,
-        checksum=None, content=None, force=False):   
+        checksum=None, content=None, force=False):
         # /objects/{pid}/datastreams/{dsID} ? [dsLocation] [altIDs] [dsLabel] [versionable] [dsState] [formatURI] [checksumType] [checksum] [mimeType] [logMessage] [force] [ignoreContent]
         # NOTE: not implementing ignoreContent (unneeded)
-        
+
         # content via multipart file in request content, or dsLocation=URI
         # if dsLocation or content is not specified, datastream content will not be updated
         # content can be string or a file-like object
@@ -570,10 +574,10 @@ class REST_API(HTTP_API_Base):
                     'state' : state}
         if logMessage is not None:
             http_args['logMessage'] = logMessage
-            
+
         url = 'objects/%s' % (pid,)
-        r = self.put(url, params=http_args, prefetch=True)
-        # prefetch to immediately release the connection, since we
+        r = self.put(url, params=http_args, stream=True)
+        # stream to immediately release the connection, since we
         # won't actually read the response content
         return r.status_code == requests.codes.ok
 
@@ -643,14 +647,14 @@ class REST_API(HTTP_API_Base):
 
         :returns: boolean; indicates whether or not a relationship was
             removed
-        
+
         '''
 
         http_args = {'subject': subject, 'predicate': predicate,
                      'object': object, 'isLiteral': isLiteral}
         if datatype is not None:
             http_args['datatype'] = datatype
-        
+
         url = 'objects/%s/relationships' % (pid, )
         r = self.delete(url, params=http_args)
         # should have a status code of 200;
@@ -660,16 +664,16 @@ class REST_API(HTTP_API_Base):
 
     def setDatastreamState(self, pid, dsID, dsState):
         # /objects/{pid}/datastreams/{dsID} ? [dsState]
-        http_args = { 'dsState' : dsState }
+        http_args = {'dsState': dsState }
 
         url = 'objects/%s/datastreams/%s' % (pid, dsID)
-        r = self.put(url, params=http_args)  # prefetch ?
+        r = self.put(url, params=http_args)  # stream ?
         # returns response code 200 on success
         return r.status_code == requests.codes.ok
 
     def setDatastreamVersionable(self, pid, dsID, versionable):
         # /objects/{pid}/datastreams/{dsID} ? [versionable]
-        http_args = { 'versionable' : versionable }
+        http_args = {'versionable' : versionable }
         url = 'objects/%s/datastreams/%s' % (pid, dsID)
         r = self.put(url, params=http_args)
         # returns response code 200 on success
@@ -679,12 +683,12 @@ class REST_API(HTTP_API_Base):
 
     ### utility methods
 
-        
+
     def upload(self, data):
         '''
         Upload a multi-part file for content to ingest.  Returns a
         temporary upload id that can be used as a datstream location.
-        '''        
+        '''
         url = 'upload'
 
         # fedora only expects content uploaded as multipart file
@@ -791,11 +795,11 @@ class ResourceIndex(HTTP_API_Base):
         if flush is None:
             flush = self.RISEARCH_FLUSH_ON_QUERY
         http_args['flush'] = 'true' if flush else 'false'
-        
+
         risearch_url = 'risearch'
         try:
-            r = self.get(risearch_url, params=http_args, prefetch=False)
-            # NOTE: prefetch=False required in order to use iter_lines
+            r = self.get(risearch_url, params=http_args, stream=False)
+            # NOTE: stream=False required in order to use iter_lines
             # without getting 'content already consumed' error
 
             # parse the result according to requested format
@@ -807,15 +811,15 @@ class ResourceIndex(HTTP_API_Base):
                 return csv.DictReader(r.iter_lines())
             elif format == 'count':
                 return int(r.content)
-            
-            # should we return the response as fallback? 
+
+            # should we return the response as fallback?
         except RequestFailed, f:
             if 'Unrecognized query language' in f.detail:
                 raise UnrecognizedQueryLanguage(f.detail)
-            # could also see 'Unsupported output format' 
+            # could also see 'Unsupported output format'
             else:
                 raise f
-        
+
 
     def spo_search(self, subject=None, predicate=None, object=None):
         """

@@ -35,19 +35,19 @@ setup(
         'eulxml>=0.18.0',
         'rdflib>=3.0',
         'python-dateutil',
-        'requests>=0.13.1',
+        'requests>=0.1.10',
         'pycrypto',
     ],
 
     # indexdata utils are optional. They include things like PDF text stripping (pyPdf).
     # Be sure to include the below in your own pip dependencies file if you need to use
     # the built in indexer utility support.
-    extras_require = {
-        'indexdata_util': ['pyPdf',],
+    extras_require={
+        'indexdata_util': ['pyPdf', ],
     },
 
     description='Idiomatic access to digital objects in a Fedora Commons repository',
     long_description=LONG_DESCRIPTION,
     classifiers=CLASSIFIERS,
-    scripts=['scripts/fedora-checksums',],
+    scripts=['scripts/fedora-checksums', ],
 )
