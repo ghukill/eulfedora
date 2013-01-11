@@ -25,6 +25,7 @@ import os
 from rdflib import URIRef, Graph as RdfGraph, XSD, Literal
 from rdflib.namespace import Namespace
 import tempfile
+from time import sleep
 
 from eulfedora import models
 from eulfedora.api import ApiFacade
@@ -607,13 +608,28 @@ class TestDigitalObject(FedoraTestCase):
     def test_object_label(self):
         # object label set method has special functionality
         self.obj.label = ' '.join('too long' for i in range(50))
-        self.assertEqual(255, len(self.obj.label), 'object label should be truncated to 255 characters')
+        self.assertEqual(self.obj.label_max_size, len(self.obj.label),
+            'object label should be truncated to 255 characters')
         self.assertTrue(self.obj.info_modified, 'object info modified when object label has changed')
 
         self.obj.info_modified = False
         self.obj.label = str(self.obj.label)
         self.assertFalse(self.obj.info_modified,
                          'object info should not be considered modified after setting label to its current value')
+
+    def test_object_owner(self):
+        self.obj.owner = ','.join('userid' for i in range(14))
+        self.assertTrue(len(self.obj.owner) <= self.obj.owner_max_size,
+            'object owner should be truncated to 64 characters or less')
+        self.assertTrue(self.obj.info_modified,
+            'object info modified when object owner has changed')
+        # last value should not be truncated
+        self.assertTrue(self.obj.owner.endswith('userid'))
+
+        # non-delimited value should just be truncated
+        self.obj.owner = ''.join('longestownernameever' for i in range(10))
+        self.assertEqual(self.obj.owner_max_size, len(self.obj.owner),
+            'object owner should be truncated to 64 characters or less')
 
     def test_save(self):
         # unmodified object - save should do nothing
@@ -989,7 +1005,7 @@ class TestRelation(FedoraTestCase):
     
     def setUp(self):
         super(TestRelation, self).setUp()
-        #self.pid = self.fedora_fixtures_ingested[-1] # get the pid for the last object
+        self.pid = self.fedora_fixtures_ingested[-1]  # get the pid for the last object
         self.obj = RelatorObject(self.api)
 
     def test_object_relation(self):
@@ -1073,11 +1089,13 @@ class TestRelation(FedoraTestCase):
                          'dc:identifier should not be set in rels-ext after delete')
         
     def test_reverse_relation(self):
-        # NOTE: this test depends on syncUpdates being set to true in Fedora
-        rev = ReverseRelator(self.api, 'foo:1')
+        rev = ReverseRelator(self.api, pid=self.getNextPid())
         # add a relation to the object and save so we can query risearch
         self.obj.parent = rev
         self.obj.save()
+        # adding a sleep so that tests do not require syncUpdates turned
+        # on in fedora/risearch
+        sleep(6)
         self.fedora_fixtures_ingested.append(self.obj.pid) # save pid for cleanup in tearDown
 
         # NOTE: running a risearch query with flush=True so that
@@ -1091,7 +1109,8 @@ class TestRelation(FedoraTestCase):
 
         self.assert_(isinstance(rev.members, list),
             'ReverseRelation returns list when multiple=True')
-        self.assertEqual(rev.members[0].pid, self.obj.pid,
+        pids = [m.pid for m in rev.members]
+        self.assertTrue(self.obj.pid in pids,
             'ReverseRelation list includes correct item')
         self.assert_(isinstance(rev.members[0], RelatorObject),
             'ReverseRelation list items initialized as correct object type')

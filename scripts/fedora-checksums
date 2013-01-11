@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 # file scripts/fedora-checksums
-# 
+#
 #   Copyright 2012 Emory University Libraries
 #
 #   Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,12 +33,11 @@ import sys
 import threading
 from time import sleep
 
+ProgressBar = None
 try:
-    from progressbar import ProgressBar, Bar, Percentage, ETA, SimpleProgress, Timer, \
-         Widget
-
+    from progressbar import ProgressBar, Bar, Percentage, ETA, SimpleProgress
 except ImportError:
-    ProgressBar = None
+    pass
 
 
 class FedoraChecksums(object):
@@ -54,17 +53,16 @@ class FedoraChecksums(object):
     # URI for Fedora object content model
     object_model = 'info:fedora/fedora-system:FedoraObject-3.0'
 
-
     def config_arg_parser(self):
         # configure argument parser
-        
+
         # common args for either mode
         common_args = argparse.ArgumentParser(add_help=False)
         # fedora connection options
         repo_args = common_args.add_argument_group('Fedora repository connection options')
         repo_args.add_argument('--fedora-root', dest='fedora_root', required=True,
                                help='URL for accessing fedora, e.g. http://localhost:8080/fedora/')
-        repo_args.add_argument('--fedora-user', dest='fedora_user', default=None, 
+        repo_args.add_argument('--fedora-user', dest='fedora_user', default=None,
                                help='Fedora username')
         repo_args.add_argument('--fedora-password', dest='fedora_password', metavar='PASSWORD',
                                default=None, action=PasswordAction,
@@ -106,6 +104,8 @@ class FedoraChecksums(object):
                               help='''Checksum type to use; if not specified,
                               will prompt Fedora to use the configured default checksum type''')
 
+        r_parser.add_argument('--force', dest='force_ds_ids', action=CSVAction,
+                              help='''A comma separated list of datastream IDs to repair even if checksum is present''')
 
     def run(self):
         # bind a handler for interrupt signal
@@ -113,7 +113,6 @@ class FedoraChecksums(object):
 
         self.config_arg_parser()
         self.args = self.parser.parse_args()
-
 
         # if in validation mode and csv-file is specified, open the
         # file and write the header row
@@ -139,7 +138,6 @@ class FedoraChecksums(object):
             object_pids = list(repo.risearch.get_subjects(modelns.hasModel,
                                                           self.object_model))
 
-
         # initalize progress bar
         pid_pbar = None
         total = self.args.max or len(object_pids)
@@ -147,7 +145,7 @@ class FedoraChecksums(object):
         if total >= 10 and ProgressBar and os.isatty(sys.stderr.fileno()):
             widgets = [Percentage(), ' (', SimpleProgress(), ')',
                        Bar(), ETA()]
-            pid_pbar = ProgressBar(widgets = widgets, maxval=total).start()
+            pid_pbar = ProgressBar(widgets=widgets, maxval=total).start()
 
         self.todo_queue = Queue()
         self.done_queue = Queue()
@@ -160,7 +158,7 @@ class FedoraChecksums(object):
         if self.args.mode == 'validate':
             worker = ValidationWorker
             reporter = ValidationReporter
-        elif self.args.mode == 'repair':            
+        elif self.args.mode == 'repair':
             worker = RepairWorker
             reporter = RepairReporter
 
@@ -184,14 +182,14 @@ class FedoraChecksums(object):
                 continue
 
             self.queued[obj.pid] = 0
-            
+
             for dsid in obj.ds_list.iterkeys():
                 dsobj = obj.getDatastreamObject(dsid)
                 self.stats['ds'] += 1
 
                 if self.args.mode == 'validate':
                     self.queue_validation(dsobj)
-                    
+
                 elif self.args.mode == 'repair':
                     self.queue_repair(dsobj)
 
@@ -205,12 +203,11 @@ class FedoraChecksums(object):
                     pid_pbar.update(self.stats['objects'])
                 break
 
-
         # queue.join blocks; check periodically if the need to check/sleep/interrupt
         while not self.todo_queue.empty():
             sleep(1)
         self.todo_queue.join()
-        
+
         while not self.done_queue.empty():
             sleep(1)
         self.done_queue.join()
@@ -235,7 +232,7 @@ class FedoraChecksums(object):
         pid = dsobj.obj.pid
         if pid not in self.queued:
             self.queued[pid] = 0
-            
+
         if self.args.all_versions:
             # check every version of this datastream
             try:
@@ -262,7 +259,6 @@ class FedoraChecksums(object):
             print '%(invalid)d invalid checksum(s)' % self.stats
         print '%(missing)d datastream(s) with no checksum' % self.stats
 
-
     def queue_repair(self, dsobj):
         '''Add information to the ``to-do`` queue for datastream
         to be checked for repair.'''
@@ -272,10 +268,30 @@ class FedoraChecksums(object):
         self.queued[pid] += 1
         self.todo_queue.put((pid, dsobj.id))
 
+    def repair_datastream(self, dsobj):
+        '''Check for and repair a missing checksum on a single
+        datastream.  If checksum type is ``DISABLED`` and checksum
+        value is ``none``, update the checksum type and save the
+        datastream, prompting Fedora to calculate a new checksum of
+        the requested type.
+
+        :param dsobj: :class:`~eulfedora.models.DatastreamObject`
+        '''
+
+        if dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none' or dsobj.id in self.args.force_ds_ids:
+            dsobj.checksum_type = self.args.checksum_type
+            try:
+                saved = dsobj.save('updating checksum')
+                if saved:
+                    self.stats['ds_updated'] += 1
+            except Exception as e:
+                print 'Error saving %s/%s : %s' % \
+                      (dsobj.obj.pid, dsobj.id, e)
+                self.stats['ds_err'] += 1
+
     def repair_summary(self):
         '''Summarize what was done when the script was run in
         **repair** mode.'''
-        
         print '\nChecked %(objects)d object(s), updated %(ds_updated)d datastream(s)' % \
               self.stats
         if self.stats['ds_err']:
@@ -294,7 +310,6 @@ class FedoraChecksums(object):
             # report if script is in the middle of an object
             print 'Script will exit after processing currently queued objects.'
             print '(Ctrl-C / Interrupt again to quit immediately)'
-
 
 
 class DatastreamWorker(threading.Thread):
@@ -317,9 +332,9 @@ class DatastreamWorker(threading.Thread):
             try:
                 item = self.todo.get()
                 # queued item is a tuple; first element should always be pid
-                pid = item[0]  
+                pid = item[0]
                 self.done.put(self.process_queued_item(item))
-                    
+
                 self.queued[pid] -= 1
                 if self.queued[pid] == 0:
                     self.stats['objects'] += 1
@@ -336,7 +351,7 @@ class DatastreamWorker(threading.Thread):
 class Reporter(threading.Thread):
     '''Thread class with common logic for handling items in the
     ``done`` queue and reporting where appropriate.'''
-    
+
     daemon = True
 
     def __init__(self, done_queue, options, stats, queued,
@@ -353,21 +368,21 @@ class Reporter(threading.Thread):
         while True:
             try:
                 self.process_finished_item(self.done.get())
-                
+
                 if self.pbar:
                     # maxval/stats could get out of sync when interrupted
                     self.pbar.maxval = max(self.pbar.maxval, self.stats['objects'])
                     self.pbar.update(self.stats['objects'])
 
                 self.done.task_done()
-                
+
             except EmptyQueue:
-                sleep(1)        
+                sleep(1)
 
     def process_finished_item(self, *args, **kwargs):
         # result processing logic goes here
         pass
-        
+
 
 class ValidationResult(object):
     '''Result object for communicating validation outcome.'''
@@ -389,7 +404,7 @@ class ValidationResult(object):
         'Information to be displayed for verbose output'
         return "%s/%s - %s checksum (%s)" % \
                (self.pid, self.dsid,
-                self.status, self.date) 
+                self.status, self.date)
 
     def csv_data(self):
         'List of data fields to be added to CSV file'
@@ -406,11 +421,10 @@ class ValidationWorker(DatastreamWorker):
 
         obj = self.repo.get_object(pid)
         dsobj = obj.getDatastreamObject(dsid)
-        
+
         try:
             if not dsobj.validate_checksum(date=date):
                 status = 'invalid'
-
 
             # if the checksum in fedora is stored as DISABLED/none,
             # validate_checksum will return True - but that may not be
@@ -432,7 +446,7 @@ class ValidationReporter(Reporter):
 
     def process_finished_item(self, result):
         self.stats[result.status] += 1
-        
+
         if not result.valid:
             if not self.quiet:
                 print result.msg()
@@ -442,7 +456,7 @@ class ValidationReporter(Reporter):
 
 class RepairResult(object):
     '''Result object for communicating repair outcome.'''
-    
+
     def __init__(self, pid, dsid, saved, error):
         self.pid = pid
         self.dsid = dsid
@@ -458,7 +472,7 @@ class RepairWorker(DatastreamWorker):
         value is ``none``, update the checksum type and save the
         datastream, prompting Fedora to calculate a new checksum of
         the requested type.
-        
+
         :param pid: object pid
         :param dsid: datastream id to be checked
         '''
@@ -471,10 +485,10 @@ class RepairWorker(DatastreamWorker):
 
         if dsobj.checksum_type == 'DISABLED' or dsobj.checksum == 'none':
             dsobj.checksum_type = self.options.checksum_type
-            
+
             saved = False
             err = None
-        
+
             try:
                 saved = dsobj.save('updating missing checksum')
             except Exception as e:
@@ -484,15 +498,15 @@ class RepairWorker(DatastreamWorker):
         # can update status
         return RepairResult(pid, dsid, saved, err)
 
+
 class RepairReporter(Reporter):
-    
+
     def process_finished_item(self, result):
         if result.saved:
             self.stats['ds_updated'] += 1
         if result.error:
             print result.error
             self.stats['ds_err'] += 1
-
 
 
 class PasswordAction(argparse.Action):
@@ -505,6 +519,12 @@ class PasswordAction(argparse.Action):
         # otherwise, use getpass to prompt for a password
         else:
             setattr(namespace, self.dest, getpass())
+
+
+class CSVAction(argparse.Action):
+    '''Convert CSV values to python list'''
+    def __call__(self, parser, namespace, value, option_string=None):
+        setattr(namespace, self.dest, value.split(','))
 
 
 if __name__ == '__main__':
