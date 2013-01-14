@@ -17,7 +17,8 @@
 #   limitations under the License.
 
 from datetime import date
-import requests
+import sys
+from unittest2 import skipIf
 
 from test_fedora.base import FedoraTestCase, load_fixture_data, \
      FEDORA_ROOT_NONSSL, FEDORA_PIDSPACE, FEDORA_USER, FEDORA_PASSWORD
@@ -28,8 +29,9 @@ from eulfedora.util import RequestFailed
 
 from testcore import main
 
+
 class TestBasicFedoraFunctionality(FedoraTestCase):
-    pidspace = FEDORA_PIDSPACE	# will be used for any objects ingested with ingestFixture
+    pidspace = FEDORA_PIDSPACE   # will be used for any objects ingested with ingestFixture
 
     # TODO: test Repository initialization with and without django settings
 
@@ -46,7 +48,6 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.assertEqual(len(pids), COUNT)
         for pid in pids:
             self.assertTrue(pid.startswith(PID_SPACE))
-
 
     def test_ingest_without_pid(self):
         object = load_fixture_data('basic-object.foxml')
@@ -74,7 +75,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.assertEqual(obj.pid, testpid)
 
         # with info:fedora/ prefix
-        obj = self.repo.get_object("info:fedora/"+testpid)
+        obj = self.repo.get_object("info:fedora/%s" % testpid)
         self.assertTrue(isinstance(obj, DigitalObject))
         self.assertEqual(obj.pid, testpid)
 
@@ -96,7 +97,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
 
     def test_infer_object_subtype(self):
         class AnotherDigitalObject(DigitalObject):
-            CONTENT_MODELS = [ 'info:fedora/example:ExampleObject-1.0' ]
+            CONTENT_MODELS = ['info:fedora/example:ExampleObject-1.0']
 
         obj = self.repo.get_object(type=AnotherDigitalObject)
         obj.save()
@@ -124,7 +125,6 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
 
         #TODO: Test for errors? Test for multiple possible matches?
 
-
     def test_find_objects(self):
         self.ingestFixture("object-with-pid.foxml")
         pid = self.fedora_fixtures_ingested[0]
@@ -143,7 +143,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
 
         # ingest 2 more copies of the same test object, then retrieve with chunksize=2
         # - retrieve a second chunk of results with findObjects with a session token
-        for p in (1,2):
+        for p in (1, 2):
             self.ingestFixture("object-with-pid.foxml")
 
         objects = list(self.repo.find_objects(pid="%s:*" % FEDORA_PIDSPACE, chunksize=2))
@@ -163,7 +163,6 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.assert_(len(objects) > 0)
         # invalid filter
         self.assertRaises(Exception, list, self.repo.find_objects(created__bogusfilter='foo'))
-
 
     def test_get_objects_by_cmodel(self):
         self.ingestFixture("object-with-pid.foxml")
@@ -188,11 +187,16 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         found = list(repo.find_objects(pid=pid))
         self.assertEqual(1, len(found))
 
+    @skipIf(sys.platform == 'darwin',
+        "bad hostname raises requests.ConnectionError instaed of RequestFailed on OSX")
     def test_badhostname(self):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
         repo = Repository('http://bogus.host.name.foo:8080/fedora/')
+        # NOTE: on OSX this generates a requests.ConnectionError
+        # but under linux it is caught and handled as a RequestFailed
         self.assertRaises(RequestFailed, list, repo.find_objects(pid=pid))
+
 
         # FIXME: is there any way to test that RequestContextManager closes the connection?
 
