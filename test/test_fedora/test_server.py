@@ -24,6 +24,7 @@ from test_fedora.base import FedoraTestCase, load_fixture_data, \
 from eulfedora.rdfns import model as modelns
 from eulfedora.models import DigitalObject
 from eulfedora.server import Repository
+from eulfedora.util import RequestFailed
 
 from testcore import main
 
@@ -191,7 +192,7 @@ class TestBasicFedoraFunctionality(FedoraTestCase):
         self.ingestFixture('object-with-pid.foxml')
         pid = self.fedora_fixtures_ingested[0]
         repo = Repository('http://bogus.host.name.foo:8080/fedora/')
-        self.assertRaises(requests.ConnectionError, list, repo.find_objects(pid=pid))
+        self.assertRaises(RequestFailed, list, repo.find_objects(pid=pid))
 
         # FIXME: is there any way to test that RequestContextManager closes the connection?
 

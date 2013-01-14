@@ -66,6 +66,7 @@ class TemplateTagTest(unittest.TestCase):
         response.error = 'something bad'
         response.headers = {'content-type': 'text/plain'}
         response.content = ''
+        response.text = ''
         test_obj.side_effect = PermissionDenied(response)
         test_obj._value = PermissionDenied(response) # force test_obj.value to fail
         val = t.render(ctx)

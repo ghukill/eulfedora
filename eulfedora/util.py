@@ -54,9 +54,9 @@ class RequestFailed(IOError):
         # NOTE: prior to requests 1.x we were using response.error, which doesn't
         # exist anymore.  response.text is probably more than we actually want to include here.
         # This will probably need to be revisited soon.
-        super(RequestFailed, self).__init__('%d %s' % (response.status_code, response.text))
+        super(RequestFailed, self).__init__('%d %s' % (response.status_code, response.text[:15]))
         self.code = response.status_code
-        self.reason = response.text
+        self.reason = response.text[:15]
         if response.status_code == requests.codes.server_error:
             # when Fedora gives a 500 error, it includes a stack-trace - pulling first line as detail
             # NOTE: this is likely to break if and when Fedora error responses change
