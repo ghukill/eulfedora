@@ -112,10 +112,26 @@ def repo_copy():
                 size = 0
                 for chunk in response.iter_content(4096*1024):
 
-                    # EXPERIMENTAL - WIPE CHECKSUM
-                    # the target --> <foxml:contentDigest TYPE="MD5" DIGEST="da3fb26609fbb3db7e2a6fb3d9296d74"/>
+                    # EXPERIMENTAL ########################################################################################### 
+                    
+                    '''
+                    # Wipes checksum from datastreams
+                    the target --> <foxml:contentDigest TYPE="MD5" DIGEST="da3fb26609fbb3db7e2a6fb3d9296d74"/>
+
+                    For some reason, lots of stored checksums are bad.  This wipes them on copy.
+                    '''                    
                     chunk = re.sub(r'<foxml:contentDigest.+?/>', '', chunk)
-                    chunk = re.sub(r'127.0.0.1:8080', '192.168.42.4', chunk)
+                    
+                    '''
+                    # Rewrites URL of datastream content to slurp up                    
+
+                    When host is correctly configured in Fedora, works okay.  But if localhost, then URL's getting rewritten as localhost.
+                        - config in fedora.fcfg is "fedoraServerHost"
+                    TEST: if change fedora.fcfg, do URL's get rewritten?
+                    '''
+                    # chunk = re.sub(r'127.0.0.1:8080', '192.168.42.5', chunk)
+                    
+                    # EXPERIMENTAL ###########################################################################################
 
                     size += len(chunk)
                     # update progressbar if we have one
